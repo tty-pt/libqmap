@@ -11,12 +11,12 @@ jobs:
     with:
       name: libqmap
       deps: "libqsys,libxxhash-dev"
-      deps_apk: "libqsys,xxhash-dev,libbsd-dev"
+      deps_apk: "libqsys,xxhash-dev"
       deps_pacman: "libqsys,xxhash"
       deps_rpm: "libqsys,xxhash-devel"
       deps_brew: "libqsys,xxhash"
       deps_openbsd: "libqsys,xxhash"
-      deps_msys: "libqsys,mingw-w64-x86_64-xxhash,mingw-w64-x86_64-libbsd"
+      deps_msys: "libqsys,mingw-w64-xxhash"
     secrets:
       HOST: ${{ secrets.OPENBSD_HOST }}
       USER: ${{ secrets.OPENBSD_USER }}

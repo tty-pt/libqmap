@@ -4,15 +4,14 @@
  * I'm adding some comments to make it easier to understand,
  * but whatever's user API is documented in the header file.
  */
-#include "./../include/qmap.h"
-#include "./../include/qidm.h"
+#include "./../include/ttypt/qmap.h"
+#include "./../include/ttypt/idm.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/queue.h>
 #include <xxhash.h>
-#include <qsys.h>
+#include <ttypt/qsys.h>
 #include <limits.h>
 
 /* MACROS, STRUCTS, ENUMS AND GLOBALS {{{ */
