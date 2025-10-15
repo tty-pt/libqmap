@@ -1,11 +1,7 @@
 #ifndef IDM_H
 #define IDM_H
 
-#if defined(_WIN32)
-    #include <bsd/sys/queue.h>
-#else
-    #include <sys/queue.h>
-#endif
+#include "./queue.h"
 #include <stdlib.h>
 
 #define IDM_MISS ((unsigned) -1)

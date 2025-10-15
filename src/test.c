@@ -1,9 +1,9 @@
-#include "./../include/qmap.h"
+#include "./../include/ttypt/qmap.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#include <qsys.h>
+#include <ttypt/qsys.h>
 
 #define DB_MASK 0x3
 #define MAX_LEN (BUFSIZ * 2)
