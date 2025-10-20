@@ -1,7 +1,8 @@
-LIB-LDLIBS := -lxxhash -lqsys
-LIB := qmap
-BIN := test
-HEADERS := ttypt/idm.h ttypt/queue.h
+all := libqmap test
+
+LDLIBS-libqmap := -lxxhash -lqsys
+LDLIBS-test := -lqmap
+
 CFLAGS += -g
 
--include ../mk/include.mk
+include ../mk/include.mk
