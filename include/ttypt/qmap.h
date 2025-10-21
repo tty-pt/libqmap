@@ -17,6 +17,9 @@ enum qmap_flags {
 	// QM_PGET: default to obtaining primary keys
 	// instead of values.
 	QM_PGET = 4,
+
+	// QM_SORTED: sorted index support (BTREE search)
+	QM_SORTED = 8,
 };
 
 // built-in types

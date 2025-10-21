@@ -38,19 +38,23 @@ enum QM_MBR {
 	QM_VALUE,
 };
 
+enum qm_internal_flags {
+	QM_SDIRTY = 1, // sorted list needs rebuild
+};
+
 typedef struct {
-	// these have to do with keys
+	unsigned types[2], m, mask, flags, phd, sorted_n, iflags;
+
+	idm_t idm;
+
 	unsigned *map;  	// id -> n
 	const void **omap;	// n -> key
+	void **table;		// n -> values
 
-	void **table;
-	unsigned types[2];
-	unsigned m, mask, flags;
-	idm_t idm;
 	ids_t linked;
-
-	unsigned phd;
 	qmap_assoc_t *assoc;
+
+	unsigned *sorted_idx;
 } qmap_t;
 
 typedef struct {
@@ -72,6 +76,7 @@ typedef struct {
 static qmap_t qmaps[QM_MAX];
 static qmap_cur_t qmap_cursors[QM_MAX];
 static idm_t idm, cursor_idm;
+static unsigned _qsort_cmp_hd;
 
 static qmap_type_t qmap_types[TYPES_MASK + 1];
 static unsigned types_n = 0;
@@ -98,7 +103,27 @@ qmap_ccmp(const void * const a,
 		const void * const b,
 		size_t len)
 {
-	return memcmp((char *) b, (char *) a, len);
+	return memcmp((char *) a, (char *) b, len);
+}
+
+static int
+qmap_scmp(const void * const a,
+          const void * const b,
+          size_t len UNUSED)
+{
+    return strcmp((const char *)a, (const char *)b);
+}
+
+static int
+qmap_ucmp(const void * const a,
+		const void * const b,
+		size_t len UNUSED)
+{
+	unsigned ua = * (const unsigned *) a;
+	unsigned ub = * (const unsigned *) b;
+	if (ua < ub) return -1;
+	if (ua > ub) return 1;
+	return 0;
 }
 
 static void
@@ -142,32 +167,146 @@ qmap_id(unsigned hd, const void * const key)
 {
 	qmap_t *qmap = &qmaps[hd];
 	qmap_type_t *type = &qmap_types[qmap->types[QM_KEY]];
-	size_t len = type->measure
+
+	size_t key_len = type->measure
 		? type->measure(key)
 		: type->len;
-	unsigned id = type->hash(key, len)
+	unsigned id = type->hash(key, key_len)
 		& qmap->mask;
+
 	unsigned n;
 	const void *okey;
-
-	if (qmap->types[QM_KEY] == QM_HNDL)
-		return id;
+	unsigned probe_count = 0;
 
 	while (1) {
 		n = qmap->map[id];
 		if (n == QM_MISS)
-			break;
+			break; // Found empty slot
+
 		okey = qmap_key(hd, n);
-		if (!type->cmp(okey, key, len))
+
+		if (okey == NULL) {
+			id++;
+			id &= qmap->mask;
+			probe_count++;
+			if (probe_count >= qmap->m)
+				break;
+			continue;
+		}
+
+		size_t len;
+		if (type->measure) {
+			size_t current_key_len = type->measure(key);
+			size_t okey_len = type->measure(okey);
+			len = (current_key_len > okey_len)
+				? current_key_len
+				: okey_len;
+		} else
+			len = type->len;
+
+		if (type->cmp(okey, key, len) == 0)
 			break;
-		id ++;
+
+		id++;
 		id &= qmap->mask;
+		probe_count++;
+		if (probe_count >= qmap->m)
+			break;
 	}
 
 	return id;
 }
 
 /* }}} */
+
+/* B-TREE SUPPORT HELPERS {{{ */
+
+static int
+qmap_n_cmp(const void *a, const void *b)
+{
+	unsigned n_a = *(const unsigned *)a;
+	unsigned n_b = *(const unsigned *)b;
+
+	const void *key_a = qmap_key(_qsort_cmp_hd, n_a);
+	const void *key_b = qmap_key(_qsort_cmp_hd, n_b);
+
+	if (key_a == NULL || key_b == NULL)
+		return 0;
+
+	qmap_t *qmap = &qmaps[_qsort_cmp_hd];
+	qmap_type_t *type = &qmap_types[qmap->types[QM_KEY]];
+
+	if (type->measure) {
+		size_t len_a = type->measure(key_a);
+		size_t len_b = type->measure(key_b);
+		size_t len = (len_a > len_b) ? len_a : len_b;
+		return type->cmp(key_a, key_b, len);
+	}
+
+	return type->cmp(key_a, key_b, type->len);
+}
+
+static void
+qmap_rebuild_sorted(unsigned hd)
+{
+	qmap_t *qmap = &qmaps[hd];
+	unsigned n_idx = 0;
+
+	for (unsigned n = 0; n < qmap->idm.last; n++) {
+		if (qmap->omap[n] != NULL)
+			qmap->sorted_idx[n_idx++] = n;
+	}
+	qmap->sorted_n = n_idx;
+
+	_qsort_cmp_hd = hd;
+	qsort(qmap->sorted_idx, qmap->sorted_n,
+			sizeof(unsigned), qmap_n_cmp);
+
+	qmap->iflags &= ~QM_SDIRTY;
+}
+
+static int
+qmap_bsearch(unsigned hd, const void *key, int *exact)
+{
+	qmap_t *qmap = &qmaps[hd];
+
+	if (qmap->iflags & QM_SDIRTY)
+		qmap_rebuild_sorted(hd);
+
+	qmap_type_t *type = &qmap_types[qmap->types[QM_KEY]];
+	size_t key_len = qmap_len(qmap->types[QM_KEY], key);
+	int low = 0, high = (int) qmap->sorted_n - 1;
+	int mid = 0;
+
+	*exact = 0;
+
+	if (qmap->sorted_n == 0)
+		return 0;
+
+	while (low <= high) {
+		mid = low + (high - low) / 2;
+		const void *mid_key = qmap_key(hd, qmap->sorted_idx[mid]);
+
+		size_t len;
+		if (type->measure) {
+			size_t mid_len = type->measure(mid_key);
+			len = (key_len > mid_len) ? key_len : mid_len;
+		} else
+			len = type->len;
+
+		int cmp = type->cmp(mid_key, key, len);
+
+		if (cmp == 0) {
+			*exact = 1;
+			return mid;
+		} else if (cmp < 0)
+			low = mid + 1;
+		else
+			high = mid - 1;
+	}
+
+	return low;
+}
 
 /* OPEN / INITIALIZATION {{{ */
 
@@ -208,6 +347,17 @@ _qmap_open(unsigned ktype, unsigned vtype,
 	qmap->table = malloc(sizeof(void *) * len);
 	memset(qmap->table, 0, sizeof(void *) * len);
 	// }}}
+
+	if (flags & QM_SORTED) {
+		qmap->sorted_idx = malloc(sizeof(unsigned) * len);
+		CBUG(!qmap->sorted_idx, "malloc error (sorted_idx)\n");
+		qmap->iflags |= QM_SDIRTY;
+	} else {
+		qmap->sorted_idx = NULL;
+		qmap->iflags &= ~QM_SDIRTY;
+	}
+
+	qmap->sorted_n = 0;
 
 	memset(qmap->map, 0xFF, ids_len);
 	memset(qmap->omap, 0, sizeof(void *) * len);
@@ -260,9 +410,11 @@ qmap_init(void)
 	// QM_HNDL
 	type = &qmap_types[qmap_reg(sizeof(unsigned))];
 	type->hash = qmap_nohash;
+	type->cmp = qmap_ucmp;
 
 	// QM_STR
-	qmap_mreg(s_measure);
+	type = &qmap_types[qmap_mreg(s_measure)];
+	type->cmp = qmap_scmp;
 }
 
 /* }}} */
@@ -331,6 +483,9 @@ _qmap_put(unsigned hd, const void * key,
 
 	qmap->map[id] = n;
 	qmap->omap[n] = rkey;
+
+	if (qmap->phd == hd && (qmap->flags & QM_SORTED))
+		qmap->iflags |= QM_SDIRTY;
 
 	return id;
 }
@@ -414,6 +569,8 @@ static void qmap_ndel_topdown(unsigned hd, unsigned n){
 	id = qmap_id(hd, key);
 
 	if (qmap->phd == hd) {
+		if (qmap->flags & QM_SORTED)
+			qmap->iflags |= QM_SDIRTY;
 		value = qmap_val(hd, n);
 		free((void *) key);
 		free((void *) value);
@@ -461,22 +618,15 @@ qmap_iter(unsigned hd, const void * const key, unsigned flags)
 	qmap_t *qmap = &qmaps[hd];
 	unsigned cur_id = idm_new(&cursor_idm);
 	qmap_cur_t *cursor = &qmap_cursors[cur_id];
-	unsigned id;
 
-	if (key && !(flags & QM_RANGE)) {
-		unsigned n;
-
-		id = qmap_id(hd, key);
-
-		CBUG(id >= qmap->m, "Strange. Id hash "
-				"does not fit\n");
-
-		n = qmap->map[id];
-		DEBUG(2, "%u %u %u %p\n", hd, n, id, key);
-		cursor->pos = n;
-	} else {
+	if (key && (flags & QM_RANGE) && (qmap->flags & QM_SORTED)) {
+		int exact;
+		cursor->pos = qmap_bsearch(hd, key, &exact);
+	} else if (key && !(flags & QM_RANGE)) {
+		unsigned id = qmap_id(hd, key);
+		cursor->pos = qmap->map[id];
+	} else
 		cursor->pos = 0;
-	}
 
 	cursor->ipos = cursor->pos;
 	cursor->sub_cur = 0;
@@ -495,6 +645,21 @@ qmap_lnext(unsigned *sn, unsigned cur_id)
 	register qmap_t *qmap = &qmaps[cursor->hd];
 	unsigned n;
 	const void *key;
+
+	if ((cursor->flags & QM_RANGE)
+			&& (qmap->flags & QM_SORTED))
+	{
+		if (qmap->iflags & QM_SDIRTY)
+			qmap_rebuild_sorted(cursor->hd);
+
+		if (cursor->pos >= qmap->sorted_n)
+			goto end;
+
+		*sn = qmap->sorted_idx[cursor->pos];
+		cursor->pos++;
+		return 1;
+	}
+
 cagain:
 	n = cursor->pos;
 
@@ -508,17 +673,28 @@ cagain:
 	}
 
 	if (cursor->flags & QM_RANGE) {
-		qmap_type_t *type
-			= &qmap_types[qmap->types[QM_KEY]];
+		if (!cursor->key)
+			goto next;
 
-		if (cursor->key && type->cmp(key, cursor->key,
-					type->len) < 0)
-		{
+		qmap_type_t *type = &qmap_types[qmap->types[QM_KEY]];
+		size_t len;
+
+		if (type->measure) {
+			size_t key_len = type->measure(key);
+			size_t start_key_len = type->measure(cursor->key);
+			len = (key_len > start_key_len)
+				? key_len
+				: start_key_len;
+		} else
+			len = type->len;
+
+		if (type->cmp(key, cursor->key, len) < 0) {
 			cursor->pos++;
 			goto cagain;
 		}
 	} else if (cursor->key && n != cursor->ipos)
 		goto end;
+next:
 
 	DEBUG(3, "NEXT! cur_id %u key %p\n",
 			cur_id, key);
@@ -583,6 +759,8 @@ qmap_close(unsigned hd)
 	qmap->idm.last = 0;
 	free(qmap->map);
 	free(qmap->omap);
+	if (qmap->sorted_idx)
+		free(qmap->sorted_idx);
 	if (qmap->phd == hd)
 		free(qmap->table);
 	qmap->omap = NULL;
