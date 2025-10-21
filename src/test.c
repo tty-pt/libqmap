@@ -50,8 +50,8 @@ int s_cmp(const void *a, const void *b) {
 }
 
 int u_cmp(const void *a, const void *b) {
-	return (* (unsigned *) b)
-		- (* (unsigned *) a);
+	return (* (unsigned *) a)
+		- (* (unsigned *) b);
 }
 
 type_meta_t type_meta[] = {
@@ -185,6 +185,54 @@ gen_del(unsigned hd, void *key, void *value)
 	ret = _gen_get(hd, key, value, value, 1);
 	errors += ret;
 	return ret;
+}
+
+static int
+gen_iter_check(unsigned hd, const void *key_start, unsigned flags,
+               int n_expected, const void *expected_keys[])
+{
+    unsigned cur_id;
+    const void *key, *value;
+    int i = 0;
+    int iter_errors = 0;
+
+    printf("gen_iter_check(hd=%u, start_key=", hd);
+    if (key_start) type_print(hd, QM_KEY, key_start);
+    else printf("NULL");
+    printf(", flags=0x%x)\n", flags);
+
+    cur_id = qmap_iter(hd, key_start, flags);
+    while (qmap_next(&key, &value, cur_id)) {
+        printf("  > iter %d: key=", i);
+        type_print(hd, QM_KEY, key);
+
+        if (i >= n_expected) {
+            printf(" %s (got more than %d expected)\n", bad, n_expected);
+            iter_errors++;
+        } else if (type_cmp(hd, QM_KEY, (void*)key, (void*)expected_keys[i]) != 0) {
+            printf(" %s (expected '", bad);
+            type_print(hd, QM_KEY, expected_keys[i]);
+            printf("')\n");
+            iter_errors++;
+        } else {
+            printf(" %s\n", good);
+        }
+        i++;
+    }
+
+    if (i != n_expected) {
+        printf("  > iter end: %s (got %d items, expected %d)\n", bad, i, n_expected);
+        iter_errors++;
+    }
+
+    if (iter_errors > 0) {
+        printf("  > RESULT: %d iteration errors %s\n", iter_errors, bad);
+        errors += iter_errors;
+        return 1; // failure
+    }
+
+    printf("  > RESULT: all %d items correct %s\n", n_expected, good);
+    return 0; // success
 }
 
 static inline void
@@ -446,6 +494,98 @@ void test_eleventh(void)
 	qmap_close(hd);
 }
 
+static inline
+void test_twelfth(void)
+{
+    printf("Testing QM_SORTED + QM_RANGE (STOS map)\n");
+    // Note: Must pass QM_SORTED flag
+    unsigned hd = gen_open(STOS, QM_SORTED);
+
+    // 1. Insert out of order
+    gen_put(hd, "delta", "d");
+    gen_put(hd, "alpha", "a");
+    gen_put(hd, "gamma", "g");
+    gen_put(hd, "beta", "b");
+
+    // 2. Test full sorted iteration
+    const void *full_order[] = { "alpha", "beta", "delta", "gamma" };
+    gen_iter_check(hd, NULL, QM_RANGE, 4, full_order);
+
+    // 3. Test range start (exact key)
+    const void *range_beta[] = { "beta", "delta", "gamma" };
+    gen_iter_check(hd, "beta", QM_RANGE, 3, range_beta);
+
+    // 4. Test range start (non-exact key)
+    const void *range_charlie[] = { "delta", "gamma" };
+    gen_iter_check(hd, "charlie", QM_RANGE, 2, range_charlie);
+
+    // 5. Test end-of-range
+    gen_iter_check(hd, "zulu", QM_RANGE, 0, NULL);
+
+    // 6. Test "dirty" rebuild (after put/del)
+    printf("Testing dirty rebuild (del/put)\n");
+    gen_del(hd, "gamma", "g"); // del
+    gen_put(hd, "epsilon", "e"); // add
+    gen_put(hd, "bravo", "b2");  // add
+
+    const void *final_order[] = { "alpha", "bravo", "delta", "epsilon" };
+    gen_iter_check(hd, NULL, QM_RANGE, 4, final_order);
+
+    qmap_close(hd);
+}
+
+static inline
+void test_thirteenth(void)
+{
+    printf("Testing QM_SORTED + QM_RANGE (UTOS map)\n");
+    unsigned hd = gen_open(UTOS, QM_SORTED);
+
+    unsigned keys[] = { 50, 10, 30, 20 };
+
+    gen_put(hd, &keys[0], "fifty");
+    gen_put(hd, &keys[1], "ten");
+    gen_put(hd, &keys[2], "thirty");
+    gen_put(hd, &keys[3], "twenty");
+
+    // Expected keys in ascending order (10, 20, 30, 50)
+    const void *full_order[] = { &keys[1], &keys[3], &keys[2], &keys[0] };
+    gen_iter_check(hd, NULL, QM_RANGE, 4, full_order);
+
+    // Test range start (key=30)
+    unsigned key_30 = 30;
+    const void *range_start[] = { &keys[2], &keys[0] }; // 30, 50
+    gen_iter_check(hd, &key_30, QM_RANGE, 2, range_start);
+
+    qmap_close(hd);
+}
+
+static inline
+void test_fourteenth(void)
+{
+    printf("Testing QM_RANGE fallback (non-SORTED map)\n");
+    unsigned hd = gen_open(STOS, 0); // No QM_SORTED
+
+    gen_put(hd, "delta", "d");
+    gen_put(hd, "alpha", "a");
+    gen_put(hd, "gamma", "g");
+
+    // We can't guarantee order, so we just print
+    // We expect to see "delta", "alpha", "gamma" in HASH order, not alphabetical
+    printf("Full iteration (should be hash/insert order, NOT alphabetical):\n");
+    unsigned cur_id = qmap_iter(hd, NULL, QM_RANGE);
+    const void *key, *value;
+    while(qmap_next(&key, &value, cur_id))
+        iter_print(hd, key, value);
+
+    // Test the filtering part of the fallback
+    printf("Range iteration from 'c' (should be 'delta', 'gamma' in any order):\n");
+    cur_id = qmap_iter(hd, "c", QM_RANGE);
+    while(qmap_next(&key, &value, cur_id))
+        iter_print(hd, key, value);
+
+    qmap_close(hd);
+}
+
 int main(void) {
 	printf("first\n");
 	test_first();
@@ -471,6 +611,12 @@ int main(void) {
 	test_tenth();
 	printf("eleventh\n");
 	test_eleventh();
+	printf("twelfth\n");
+	test_twelfth();
+	printf("thirteenth\n");
+	test_thirteenth();
+	printf("fourteenth\n");
+	test_fourteenth();
 
 	return -errors;
 }
