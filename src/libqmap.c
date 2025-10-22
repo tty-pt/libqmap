@@ -44,7 +44,9 @@ enum qm_internal_flags {
 
 typedef struct {
 	unsigned types[2], m, mask, flags, phd, sorted_n, iflags;
+} qmap_head_t;
 
+typedef struct {
 	idm_t idm;
 
 	unsigned *map;  	// id -> n
@@ -73,6 +75,7 @@ typedef struct {
 	qmap_cmp_t *cmp;
 } qmap_type_t;
 
+static qmap_head_t qmap_heads[QM_MAX];
 static qmap_t qmaps[QM_MAX];
 static qmap_cur_t qmap_cursors[QM_MAX];
 static idm_t idm, cursor_idm;
@@ -149,12 +152,13 @@ qmap_key(unsigned hd, unsigned n)
 /* Easily obtain the pointer to the value */
 static inline void *
 qmap_val(unsigned hd, unsigned n) {
-	qmap_t *qmap = &qmaps[hd], *pqmap;
+	qmap_head_t *head = &qmap_heads[hd];
+	qmap_t *pqmap;
 
-	if (qmap->flags & QM_PGET)
-		return qmap_key(qmap->phd, n);
+	if (head->flags & QM_PGET)
+		return qmap_key(head->phd, n);
 
-	pqmap = &qmaps[qmap->phd];
+	pqmap = &qmaps[head->phd];
 	return * VAL_ADDR(pqmap, n);
 }
 
@@ -165,14 +169,15 @@ qmap_val(unsigned hd, unsigned n) {
 static inline unsigned
 qmap_id(unsigned hd, const void * const key)
 {
+	qmap_head_t *head = &qmap_heads[hd];
 	qmap_t *qmap = &qmaps[hd];
-	qmap_type_t *type = &qmap_types[qmap->types[QM_KEY]];
+	qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
 
 	size_t key_len = type->measure
 		? type->measure(key)
 		: type->len;
 	unsigned id = type->hash(key, key_len)
-		& qmap->mask;
+		& head->mask;
 
 	unsigned n;
 	const void *okey;
@@ -187,9 +192,9 @@ qmap_id(unsigned hd, const void * const key)
 
 		if (okey == NULL) {
 			id++;
-			id &= qmap->mask;
+			id &= head->mask;
 			probe_count++;
-			if (probe_count >= qmap->m)
+			if (probe_count >= head->m)
 				break;
 			continue;
 		}
@@ -208,9 +213,9 @@ qmap_id(unsigned hd, const void * const key)
 			break;
 
 		id++;
-		id &= qmap->mask;
+		id &= head->mask;
 		probe_count++;
-		if (probe_count >= qmap->m)
+		if (probe_count >= head->m)
 			break;
 	}
 
@@ -233,8 +238,8 @@ qmap_n_cmp(const void *a, const void *b)
 	if (key_a == NULL || key_b == NULL)
 		return 0;
 
-	qmap_t *qmap = &qmaps[_qsort_cmp_hd];
-	qmap_type_t *type = &qmap_types[qmap->types[QM_KEY]];
+	qmap_head_t *head = &qmap_heads[_qsort_cmp_hd];
+	qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
 
 	if (type->measure) {
 		size_t len_a = type->measure(key_a);
@@ -249,6 +254,7 @@ qmap_n_cmp(const void *a, const void *b)
 static void
 qmap_rebuild_sorted(unsigned hd)
 {
+	qmap_head_t *head = &qmap_heads[hd];
 	qmap_t *qmap = &qmaps[hd];
 	unsigned n_idx = 0;
 
@@ -256,31 +262,32 @@ qmap_rebuild_sorted(unsigned hd)
 		if (qmap->omap[n] != NULL)
 			qmap->sorted_idx[n_idx++] = n;
 	}
-	qmap->sorted_n = n_idx;
+	head->sorted_n = n_idx;
 
 	_qsort_cmp_hd = hd;
-	qsort(qmap->sorted_idx, qmap->sorted_n,
+	qsort(qmap->sorted_idx, head->sorted_n,
 			sizeof(unsigned), qmap_n_cmp);
 
-	qmap->iflags &= ~QM_SDIRTY;
+	head->iflags &= ~QM_SDIRTY;
 }
 
 static int
 qmap_bsearch(unsigned hd, const void *key, int *exact)
 {
+	qmap_head_t *head = &qmap_heads[hd];
 	qmap_t *qmap = &qmaps[hd];
 
-	if (qmap->iflags & QM_SDIRTY)
+	if (head->iflags & QM_SDIRTY)
 		qmap_rebuild_sorted(hd);
 
-	qmap_type_t *type = &qmap_types[qmap->types[QM_KEY]];
-	size_t key_len = qmap_len(qmap->types[QM_KEY], key);
-	int low = 0, high = (int) qmap->sorted_n - 1;
+	qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
+	size_t key_len = qmap_len(head->types[QM_KEY], key);
+	int low = 0, high = (int) head->sorted_n - 1;
 	int mid = 0;
 
 	*exact = 0;
 
-	if (qmap->sorted_n == 0)
+	if (head->sorted_n == 0)
 		return 0;
 
 	while (low <= high) {
@@ -316,6 +323,7 @@ _qmap_open(unsigned ktype, unsigned vtype,
 		unsigned mask, unsigned flags)
 {
 	unsigned hd = idm_new(&idm);
+	qmap_head_t *head = &qmap_heads[hd];
 	qmap_t *qmap = &qmaps[hd];
 	unsigned len;
 	size_t ids_len;
@@ -334,14 +342,15 @@ _qmap_open(unsigned ktype, unsigned vtype,
 	qmap->map = malloc(ids_len);
 	qmap->omap = malloc(len * sizeof(void *));
 	CBUG(!(qmap->map && qmap->omap), "malloc error\n");
-	qmap->m = len;
-	qmap->types[QM_KEY] = ktype;
-	qmap->types[QM_VALUE] = vtype;
-	qmap->mask = mask;
-	qmap->flags = flags;
 	qmap->idm = idm_init();
-	qmap->phd = hd;
 	qmap->linked = ids_init();
+
+	head->m = len;
+	head->types[QM_KEY] = ktype;
+	head->types[QM_VALUE] = vtype;
+	head->mask = mask;
+	head->flags = flags;
+	head->phd = hd;
 
 	// STORE {{{
 	qmap->table = malloc(sizeof(void *) * len);
@@ -351,13 +360,13 @@ _qmap_open(unsigned ktype, unsigned vtype,
 	if (flags & QM_SORTED) {
 		qmap->sorted_idx = malloc(sizeof(unsigned) * len);
 		CBUG(!qmap->sorted_idx, "malloc error (sorted_idx)\n");
-		qmap->iflags |= QM_SDIRTY;
+		head->iflags |= QM_SDIRTY;
 	} else {
 		qmap->sorted_idx = NULL;
-		qmap->iflags &= ~QM_SDIRTY;
+		head->iflags &= ~QM_SDIRTY;
 	}
 
-	qmap->sorted_n = 0;
+	head->sorted_n = 0;
 
 	memset(qmap->map, 0xFF, ids_len);
 	memset(qmap->omap, 0, sizeof(void *) * len);
@@ -429,6 +438,7 @@ static inline unsigned
 _qmap_put(unsigned hd, const void * key,
 		const void *value, unsigned pn)
 {
+	qmap_head_t *head = &qmap_heads[hd];
 	qmap_t *qmap = &qmaps[hd];
 	unsigned n;
 	unsigned id;
@@ -453,12 +463,12 @@ _qmap_put(unsigned hd, const void * key,
 		key = &id;
 	}
 
-	CBUG(n >= qmap->m, "Capacity reached\n");
+	CBUG(n >= head->m, "Capacity reached\n");
 	DEBUG(2, "%u %u %u %p\n", hd, n, id, key);
 	rkey = key ? (void *) key : &qmap->map[id];
 
-	if (qmap->phd == hd) {
-		if (qmap->types[QM_VALUE] == QM_PTR)
+	if (head->phd == hd) {
+		if (head->types[QM_VALUE] == QM_PTR)
 			value = &value;
 
 		if (qmap->map[id] == n) {
@@ -469,14 +479,14 @@ _qmap_put(unsigned hd, const void * key,
 			free((void *) eval);
 		}
 
-		klen = qmap_len(qmap->types[QM_VALUE], aval);
+		klen = qmap_len(head->types[QM_VALUE], aval);
 		rval = malloc(klen);
 		* VAL_ADDR(qmap, n) = rval;
 		memcpy(rval, value, klen);
 
 		// this could be avoided
 		// if the key is the same
-		klen = qmap_len(qmap->types[QM_KEY], key);
+		klen = qmap_len(head->types[QM_KEY], key);
 		rkey = malloc(klen);
 		memcpy(rkey, key, klen);
 	}
@@ -484,8 +494,8 @@ _qmap_put(unsigned hd, const void * key,
 	qmap->map[id] = n;
 	qmap->omap[n] = rkey;
 
-	if (qmap->phd == hd && (qmap->flags & QM_SORTED))
-		qmap->iflags |= QM_SDIRTY;
+	if (head->phd == hd && (head->flags & QM_SORTED))
+		head->iflags |= QM_SDIRTY;
 
 	return id;
 }
@@ -544,19 +554,20 @@ qmap_get(unsigned hd, const void * const key)
 static inline unsigned
 qmap_root(unsigned hd)
 {
-	while(qmaps[hd].phd != hd)
-		hd = qmaps[hd].phd;
+	while(qmap_heads[hd].phd != hd)
+		hd = qmap_heads[hd].phd;
 
 	return hd;
 }
 
 static void qmap_ndel_topdown(unsigned hd, unsigned n){
+	qmap_head_t *head = &qmap_heads[hd];
 	qmap_t *qmap = &qmaps[hd];
 	const void *key, *value;
 	unsigned id, ahd;
 	idsi_t *cur;
 
-	if (n >= qmap->m)
+	if (n >= head->m)
 		return;
 
 	cur = ids_iter(&qmap->linked);
@@ -568,9 +579,9 @@ static void qmap_ndel_topdown(unsigned hd, unsigned n){
 
 	id = qmap_id(hd, key);
 
-	if (qmap->phd == hd) {
-		if (qmap->flags & QM_SORTED)
-			qmap->iflags |= QM_SDIRTY;
+	if (head->phd == hd) {
+		if (head->flags & QM_SORTED)
+			head->iflags |= QM_SDIRTY;
 		value = qmap_val(hd, n);
 		free((void *) key);
 		free((void *) value);
@@ -615,11 +626,12 @@ qmap_fin(unsigned cur_id)
 unsigned /* API */
 qmap_iter(unsigned hd, const void * const key, unsigned flags)
 {
+	qmap_head_t *head = &qmap_heads[hd];
 	qmap_t *qmap = &qmaps[hd];
 	unsigned cur_id = idm_new(&cursor_idm);
 	qmap_cur_t *cursor = &qmap_cursors[cur_id];
 
-	if (key && (flags & QM_RANGE) && (qmap->flags & QM_SORTED)) {
+	if (key && (flags & QM_RANGE) && (head->flags & QM_SORTED)) {
 		int exact;
 		cursor->pos = qmap_bsearch(hd, key, &exact);
 	} else if (key && !(flags & QM_RANGE)) {
@@ -642,17 +654,18 @@ qmap_lnext(unsigned *sn, unsigned cur_id)
 {
 	register qmap_cur_t *cursor
 		= &qmap_cursors[cur_id];
+	register qmap_head_t *head = &qmap_heads[cursor->hd];
 	register qmap_t *qmap = &qmaps[cursor->hd];
 	unsigned n;
 	const void *key;
 
 	if ((cursor->flags & QM_RANGE)
-			&& (qmap->flags & QM_SORTED))
+			&& (head->flags & QM_SORTED))
 	{
-		if (qmap->iflags & QM_SDIRTY)
+		if (head->iflags & QM_SDIRTY)
 			qmap_rebuild_sorted(cursor->hd);
 
-		if (cursor->pos >= qmap->sorted_n)
+		if (cursor->pos >= head->sorted_n)
 			goto end;
 
 		*sn = qmap->sorted_idx[cursor->pos];
@@ -676,7 +689,7 @@ cagain:
 		if (!cursor->key)
 			goto next;
 
-		qmap_type_t *type = &qmap_types[qmap->types[QM_KEY]];
+		qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
 		size_t len;
 
 		if (type->measure) {
@@ -761,7 +774,7 @@ qmap_close(unsigned hd)
 	free(qmap->omap);
 	if (qmap->sorted_idx)
 		free(qmap->sorted_idx);
-	if (qmap->phd == hd)
+	if (qmap_heads[hd].phd == hd)
 		free(qmap->table);
 	qmap->omap = NULL;
 	idm_del(&idm, hd);
@@ -778,7 +791,7 @@ qmap_assoc(unsigned hd, unsigned link, qmap_assoc_t cb)
 	ids_push(&qmaps[link].linked, hd);
 
 	qmap->assoc = cb;
-	qmap->phd = link;
+	qmap_heads[hd].phd = link;
 	free(qmap->table);
 }
 
