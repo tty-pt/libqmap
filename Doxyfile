@@ -1,0 +1,23 @@
+# Minimized Doxyfile for Separate Man Pages
+#
+PROJECT_NAME           = "Qmap"
+OUTPUT_LANGUAGE        = English
+OPTIMIZE_OUTPUT_FOR_C  = YES
+EXTRACT_ALL            = NO
+HIDE_UNDOC_MEMBERS = YES
+HIDE_UNDOC_CLASSES = YES
+RECURSIVE              = NO
+
+# Input files
+INPUT                  = include/ttypt/
+FILE_PATTERNS          = *.h
+
+# Man Page Generation (Crucial Settings)
+GENERATE_MAN           = YES
+MAN_OUTPUT             = man
+MAN_SUBDIR             = .
+MAN_LINKS = YES
+GENERATE_GROUP_MEMBER_PAGES = YES
+
+GENERATE_HTML = NO
+GENERATE_LATEX = NO

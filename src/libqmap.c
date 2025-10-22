@@ -13,6 +13,10 @@
 #include <xxhash.h>
 #include <ttypt/qsys.h>
 #include <limits.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 
 /* MACROS, STRUCTS, ENUMS AND GLOBALS {{{ */
 
@@ -43,7 +47,8 @@ enum qm_internal_flags {
 };
 
 typedef struct {
-	uint32_t types[2], m, mask, flags, phd, sorted_n, iflags;
+	uint32_t types[2], n, m, mask, flags,
+		 phd, sorted_n, iflags, dbid;
 } qmap_head_t;
 
 typedef struct {
@@ -75,6 +80,13 @@ typedef struct {
 	qmap_cmp_t *cmp;
 } qmap_type_t;
 
+typedef struct {
+	ids_t ids;
+	int fd;
+	char *mmaped;
+	size_t size;
+} qmap_file_t;
+
 static qmap_head_t qmap_heads[QM_MAX];
 static qmap_t qmaps[QM_MAX];
 static qmap_cur_t qmap_cursors[QM_MAX];
@@ -83,6 +95,9 @@ static uint32_t _qsort_cmp_hd;
 
 static qmap_type_t qmap_types[TYPES_MASK + 1];
 static uint32_t types_n = 0;
+
+static uint32_t qmap_files_hd, qmap_dbs_hd;
+static int mdbs[QM_MAX];
 
 /* }}} */
 
@@ -374,12 +389,53 @@ _qmap_open(uint32_t ktype, uint32_t vtype,
 	return hd;
 }
 
+static inline void
+qmap_load_file(char *filename, uint32_t dbid);
+
 uint32_t /* API */
-qmap_open(uint32_t ktype, uint32_t vtype,
+qmap_open(const char *filename,
+		const char *database,
+		uint32_t ktype, uint32_t vtype,
 		uint32_t mask, uint32_t flags)
 {
 	uint32_t hd = _qmap_open(ktype, vtype, mask, flags);
+	qmap_head_t *head = &qmap_heads[hd];
 
+	if (database)
+		head->dbid = XXH32(database, strlen(database), QM_SEED);
+	else
+		head->dbid = QM_MISS;
+
+	if (!filename)
+		goto file_skip;
+	else {
+		char buf[strlen(filename)
+			+ strlen(database) + 2];
+
+		snprintf(buf, sizeof(buf), "%s/%s",
+				filename, database);
+
+		const uint32_t *ehd = qmap_get(qmap_dbs_hd, buf);
+		qmap_put(qmap_dbs_hd, buf, &hd);
+
+		if (ehd && mdbs[*ehd])
+			mdbs[*ehd] = 0;
+		mdbs[hd] = 1;
+	}
+
+	const qmap_file_t *file_p
+		= qmap_get(qmap_files_hd, filename);
+
+	if (!file_p) {
+		qmap_file_t file;
+		memset(&file, 0, sizeof(file));
+		file.ids = ids_init();
+		ids_push(&file.ids, hd);
+		qmap_put(qmap_files_hd, filename, &file);
+	} else
+		ids_push((ids_t *) &file_p->ids, hd);
+
+file_skip:
 	if (!(flags & QM_MIRROR))
 		return hd;
 
@@ -387,6 +443,8 @@ qmap_open(uint32_t ktype, uint32_t vtype,
 	_qmap_open(vtype, ktype, mask, flags | QM_PGET);
 	qmap_assoc(hd + 1, hd, NULL);
 
+	if (filename)
+		qmap_load_file((char*) filename, head->dbid);
 	return hd;
 }
 
@@ -396,13 +454,29 @@ s_measure(const void *key)
 	return strlen(key) + 1;
 }
 
+static void file_close(qmap_file_t *file) {
+	CBUG(munmap(file->mmaped, file->size) == -1,
+			"munmap failed");
+
+	close(file->fd);
+	file->mmaped = 0;
+}
+
 __attribute__((destructor))
 static void qmap_destruct(void) {
+	qmap_save();
+
 	for (uint32_t i = 0; i < idm.last; i++)
 		qmap_close(i);
 
 	idm_drop(&cursor_idm);
 	idm_drop(&idm);
+
+	uint32_t cur = qmap_iter(qmap_files_hd, NULL, 0);
+	const void *key, *value;
+
+	while (qmap_next(&key, &value, cur))
+		file_close((qmap_file_t *) value);
 }
 
 __attribute__((constructor))
@@ -424,6 +498,16 @@ qmap_init(void)
 	// QM_STR
 	type = &qmap_types[qmap_mreg(s_measure)];
 	type->cmp = qmap_scmp;
+
+	// QM_U32
+	type = &qmap_types[qmap_reg(sizeof(uint32_t))];
+	type->cmp = qmap_ucmp;
+
+	uint32_t qm_file = qmap_reg(sizeof(qmap_file_t));
+	qmap_files_hd = _qmap_open(QM_STR, qm_file,
+			QM_DEFAULT_MASK, 0);
+
+	qmap_dbs_hd = _qmap_open(QM_STR, QM_U32, QM_DEFAULT_MASK, 0);
 }
 
 /* }}} */
@@ -456,10 +540,12 @@ _qmap_put(uint32_t hd, const void * key,
 			n = idm_new(&qmap->idm);
 			if (pn != QM_MISS)
 				n = pn;
+			head->n ++;
 		} else
 			n = old_n;
 	} else {
 		id = n = idm_new(&qmap->idm);
+		head->n ++;
 		key = &id;
 	}
 
@@ -577,6 +663,13 @@ static void qmap_ndel_topdown(uint32_t hd, uint32_t n){
 
 	key = qmap_key(hd, n);
 
+	if (!key) {
+		qmap->omap[n] = NULL;
+		idm_del(&qmap->idm, n);
+		head->n --;
+		return;
+	}
+
 	id = qmap_id(hd, key);
 
 	if (head->phd == hd) {
@@ -590,6 +683,7 @@ static void qmap_ndel_topdown(uint32_t hd, uint32_t n){
 	qmap->map[id] = QM_MISS;
 	qmap->omap[n] = NULL;
 	idm_del(&qmap->idm, n);
+	head->n --;
 
 }
 
@@ -840,3 +934,187 @@ qmap_len(uint32_t type_id, const void *key)
 }
 
 /* }}} */
+
+inline static size_t
+_qmap_load(uint32_t hd, const char *mmaped, uint32_t dbid)
+{
+	const char *mm = mmaped;
+	const char *mm_start = mmaped;
+
+	uint32_t lid = * (uint32_t *) mm;
+	mm += sizeof(uint32_t);
+
+	size_t size = * (size_t *) mm;
+	mm += sizeof(size_t);
+
+	if (dbid != QM_MISS && lid != dbid)
+		return mm + size + sizeof(uint32_t) - mm_start;
+
+	uint32_t amount = * (uint32_t*) mm;
+	mm += sizeof(uint32_t);
+
+	qmap_head_t *head = &qmap_heads[hd];
+	uint32_t ktype = head->types[QM_KEY];
+	uint32_t vtype = head->types[QM_VALUE];
+
+	for (uint32_t i = 0; i < amount; i++) {
+		size_t klen = qmap_len(ktype, mm);
+		const char *mval = mm + klen;
+		size_t vlen = qmap_len(vtype, mval);
+
+		qmap_put(hd, mm, mval);
+		mm = mval + vlen;
+	}
+
+	return mm - mm_start;
+}
+
+static inline void
+qmap_load_file(char *filename, uint32_t dbid)
+{
+	qmap_file_t *file = (qmap_file_t *)
+		qmap_get(qmap_files_hd, filename);
+
+	struct stat sb;
+	char *mm;
+	idsi_t *cur;
+	uint32_t hd;
+
+	if (file->mmaped)
+		goto skip_open;
+
+	file->fd = open(filename, O_RDONLY);
+	if (file->fd < 0)
+		return;
+
+	CBUG(fstat(file->fd, &sb) == -1, "fstat");
+
+	file->size = sb.st_size;
+
+	file->mmaped = (char*) mmap(NULL, file->size,
+			PROT_READ, MAP_SHARED, file->fd, 0);
+
+skip_open:
+	cur = (idsi_t *) ids_iter(&file->ids);
+
+	mm = file->mmaped;
+	while (ids_next(&hd, &cur))
+		mm += _qmap_load(hd, mm, dbid);
+}
+
+static size_t
+_qmap_calc_size(uint32_t hd)
+{
+	qmap_head_t *head = &qmap_heads[hd];
+	uint32_t ktype = head->types[QM_KEY];
+	uint32_t vtype = head->types[QM_VALUE];
+	size_t total_size = sizeof(size_t) + sizeof(head->n);
+	uint32_t cur = qmap_iter(hd, NULL, 0);
+	const void *key, *value;
+
+	while (qmap_next(&key, &value, cur)) {
+		total_size += qmap_len(ktype, key);
+		total_size += qmap_len(vtype, value);
+	}
+
+	qmap_fin(cur);
+	return total_size;
+}
+
+static inline size_t
+qmap_calc_file_size(const ids_t *hds)
+{
+	size_t size = 0;
+	idsi_t *cur = (idsi_t *) ids_iter((ids_t *) hds);
+	uint32_t hd;
+
+	while (ids_next(&hd, &cur))
+		if (mdbs[hd])
+			size += _qmap_calc_size(hd);
+
+	return size;
+}
+
+inline static size_t
+_qmap_save(void *mmaped, uint32_t hd)
+{
+	qmap_head_t *head = &qmap_heads[hd];
+	uint32_t ktype = head->types[QM_KEY];
+	uint32_t vtype = head->types[QM_VALUE];
+	char *mm_start = mmaped;
+	char *mm = mmaped;
+	uint32_t cur = qmap_iter(hd, NULL, 0);
+	const void *key, *value;
+
+	memcpy(mm, &head->dbid, sizeof(head->dbid));
+	mm += sizeof(head->dbid);
+
+	size_t size = _qmap_calc_size(hd);
+	memcpy(mm, &size, sizeof(size));
+	mm += sizeof(size);
+
+	memcpy(mm, &head->n, sizeof(head->n));
+	mm += sizeof(head->n);
+
+	while (qmap_next(&key, &value, cur)) {
+		size_t klen = qmap_len(ktype, key);
+		size_t vlen = qmap_len(vtype, value);
+
+		memcpy(mm, key, klen);
+		mm += klen;
+		memcpy(mm, value, vlen);
+		mm += vlen;
+	}
+
+	qmap_fin(cur);
+	return mm - mm_start;
+}
+
+static inline void
+qmap_save_file(char *filename)
+{
+	qmap_file_t *file = (qmap_file_t *) qmap_get(qmap_files_hd, filename);
+	CBUG(!file, "called with unknown filename");
+
+	if (file->mmaped)
+		file_close(file);
+
+	file->size = qmap_calc_file_size(&file->ids);
+
+	file->fd = open(filename, O_RDWR | O_CREAT,
+			S_IRUSR | S_IWUSR);
+
+	CBUG(file->fd == -1, "open for save failed");
+
+	CBUG(ftruncate(file->fd, (off_t) file->size) == -1,
+			"ftruncate failed");
+
+	file->mmaped = (char*) mmap(NULL, file->size,
+			PROT_WRITE, MAP_SHARED, file->fd, 0);
+	CBUG(file->mmaped == MAP_FAILED, "mmap for save failed");
+
+	char *mm = file->mmaped;
+	uint32_t hd;
+
+	idsi_t *idsi = ids_iter(&file->ids);
+
+	while (ids_next(&hd, &idsi)) {
+		if (!mdbs[hd])
+			continue;
+
+		size_t size_written = _qmap_save(mm, hd);
+		mm += size_written;
+	}
+
+	file_close(file);
+}
+
+void /* API */
+qmap_save(void)
+{
+	uint32_t c = qmap_iter(qmap_files_hd, NULL, 0);
+	const void *key, *value;
+
+	while (qmap_next(&key, &value, c))
+		qmap_save_file((char *) key);
+}

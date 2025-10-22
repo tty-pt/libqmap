@@ -1,242 +1,323 @@
 #ifndef QMAP_H
 #define QMAP_H
 
+/**
+ * @file qmap.h
+ * @brief Public header for the Qmap library.
+ *
+ * Declares the API for Qmap — associative containers
+ * with optional persistence, mirror maps and
+ * sorted iteration.
+ */
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
 
-#define QM_MISS ((uint32_t) -1)
+#define QM_MISS ((uint32_t)-1)
 
-enum qmap_flags {
-	// QM_AINDEX: puts with NULL key yield
-	// increasing indices
-	QM_AINDEX = 1,
-
-	// QM_MIRROR: create reverse-lookup (secondary) map
-	QM_MIRROR = 2,
-
-	// QM_PGET: default to obtaining primary keys
-	// instead of values.
-	QM_PGET = 4,
-
-	// QM_SORTED: sorted index support (BTREE search)
-	QM_SORTED = 8,
-};
-
-// built-in types
-enum qmap_tbi {
-	// A pointer, which gets hashed
-	QM_PTR = 0,
-
-	// Use the value as an opaque handle (no hashing)
-	QM_HNDL = 1,
-
-	// String contents hash and compare
-	QM_STR = 2,
-};
-
-// iter flags
-enum qmap_if {
-	// Do a ranged iteration. Meaning. It will
-	// continue even if the key differs from the initial.
-	QM_RANGE = 1,
-};
-
-/* Open a database
- *
- * @param ktype
- * 	A built-in or registered type for keys.
- *
- * @param vtype
- * 	A built-in or registered type for values.
- *
- * @param mask
- * 	Must be 2^n - 1. (mask + 1) is the table size.
- *
- * @param flags
- * 	0, QM_AINDEX, QM_MIRROR, or bitwise OR of both.
- *
- * @returns
- * 	The map's handle for later reference.
+/** @defgroup qmap_constants Qmap constants
+ *  @brief Constant definitions for flags and built-in types.
+ *  @see qmap_common
+ *  @see qmap_assoc
+ *  @see qmap_iteration
+ *  @see qmap_type
+ *  @{
  */
-uint32_t qmap_open(uint32_t ktype, uint32_t vtype,
-		uint32_t mask, uint32_t flags);
 
-/* Close a qmap
+/**
+ * @brief QMap flags.
+ */
+enum qmap_flags {
+  /** Auto–index for NULL keys. */
+  QM_AINDEX = 1,
+
+  /** Create reverse-lookup (secondary) map. */
+  QM_MIRROR = 2,
+
+  /** Default to obtaining primary keys instead of
+   *  values. */
+  QM_PGET = 4,
+
+  /** Enable sorted index support (BTREE search). */
+  QM_SORTED = 8,
+};
+
+/**
+ * @brief Built-in type identifiers.
+ */
+enum qmap_tbi {
+  /** Pointer (hashed). */
+  QM_PTR  = 0,
+
+  /** Opaque handle (no hashing). */
+  QM_HNDL = 1,
+
+  /** String contents hash and compare. */
+  QM_STR  = 2,
+
+  /** 32-bit unsigned integer (hash and mask). */
+  QM_U32  = 3,
+};
+
+/**
+ * @brief Iterator flags.
+ */
+enum qmap_if {
+  /** Continue iteration even if key differs from
+   *  the initial. */
+  QM_RANGE = 1,
+};
+
+/** @} */
+
+/** @defgroup qmap_handle Qmap open, close and save
+ *  @brief Functions for opening, closing and saving maps.
+ *  @{
+ */
+
+/**
+ * @brief Open a database.
  *
- * @param hd	The handle
+ * Creates an in-memory map and registers its handle
+ * with the internal file cache, linking it to
+ * 'filename'. If a file exists, it loads the map
+ * data for the specified 'database'.
+ *
+ * @param[in] filename Path to file or cache key.
+ *                     NULL → in-memory only.
+ * @param[in] database Logical name within file.
+ * @param[in] ktype    Built-in or registered key
+ *                     type.
+ * @param[in] vtype    Built-in or registered value
+ *                     type.
+ * @param[in] mask     Must be 2ⁿ − 1; table size is
+ *                     (mask + 1).
+ * @param[in] flags    Bitwise OR of QM_AINDEX,
+ *                     QM_MIRROR, QM_SORTED, etc.
+ * @return             Map handle (hd).
+ */
+uint32_t qmap_open(const char *filename,
+                   const char *database,
+                   uint32_t ktype,
+                   uint32_t vtype,
+                   uint32_t mask,
+                   uint32_t flags);
+
+/**
+ * @brief Write all open maps to disk.
+ *
+ * Walks the internal cache, computes file sizes,
+ * and performs mmap/memcpy writes.
+ */
+void qmap_save(void);
+
+/**
+ * @brief Close a map (usually automatic).
+ *
+ * @param[in] hd Handle to close.
  */
 void qmap_close(uint32_t hd);
 
-/* Get a table position from a key
- *
- * @param hd	The handle.
- * @param key	The key.
- *
- * @returns	A pointer to the value or NULL if not found.
- */
-const void *qmap_get(uint32_t hd, const void * const key);
+/** @} */
 
-/* Put a pair into the table.
+/** @defgroup qmap_common Qmap get, put, del and drop
+ *  @brief Core key/value operations.
+ *  @see qmap_handle
+ *  @see qmap_assoc
+ *  @see qmap_iteration
+ *  @see qmap_type
+ *  @{
+ */
+
+/**
+ * @brief Retrieve a value by key.
  *
- * @param hd
- * 	The handle
+ * @param[in] hd  Map handle.
+ * @param[in] key Key to look up.
+ * @return        Pointer to value or NULL.
+ */
+const void *qmap_get(uint32_t hd,
+                     const void * const key);
+
+/**
+ * @brief Insert or update a pair.
  *
- * @param key
- *  	The key to put. May be NULL when opened
- *  	with QM_AINDEX.
- *
- * @param value
- * 	Only needed for associations (to generate
- * 	secondary keys). May be NULL otherwise.
- *
- * @returns
- * 	The position your value should be stored at.
+ * @param[in] hd    Map handle.
+ * @param[in] key   Key (NULL if QM_AINDEX).
+ * @param[in] value Value to store.
+ * @return          Index position for value.
  */
 uint32_t qmap_put(uint32_t hd,
-		const void * const key,
-		const void * const value);
+                  const void * const key,
+                  const void * const value);
 
-/* Delete an item by key.
+/**
+ * @brief Delete an entry by key.
  *
- * @param hd	The handle.
- * @param key	The key to delete.
+ * @param[in] hd  Map handle.
+ * @param[in] key Key to delete.
  */
-void qmap_del(uint32_t hd, const void * const key);
+void qmap_del(uint32_t hd,
+              const void * const key);
 
-/* Drop all of them contents.
+/**
+ * @brief Remove all entries from a map.
  *
- * @param hd
- * 	The handle.
+ * @param[in] hd Map handle.
  */
 void qmap_drop(uint32_t hd);
 
-/* Association callback type
+/** @} */
+
+/** @defgroup qmap_assoc Qmap associations
+ *  @brief Linking of primary and secondary maps.
+ *  @see qmap_handle
+ *  @see qmap_common
+ *  @see qmap_iteration
+ *  @see qmap_type
+ *  @{
+ */
+
+/**
+ * @brief Association callback type.
  *
- * @param skey
- * 	You want to set this to some pointer
- * 	that will then represent the secondary key.
- * 	
- * @param pkey
- * 	Key of the primary table.
+ * After association, future puts/dels on the
+ * primary will update the secondary.
  *
- * @param value
- * 	Value of the primary table.
- *
- * Semantics: after association, future puts/dels on
- * the primary will update the secondary accordingly.
+ * @param[out] skey  Pointer to set secondary key.
+ * @param[in]  pkey  Primary key.
+ * @param[in]  value Primary value.
  */
 typedef void qmap_assoc_t(
-		const void **skey,
-		const void * const pkey,
-		const void * const value);
+  const void **skey,
+  const void * const pkey,
+  const void * const value);
 
-/* Make an association between two tables
+/**
+ * @brief Make an association between tables.
  *
- * @param hd
- * 	Handle of the secondary map (index).
- *
- * @param link
- * 	Handle of the primary map (source).
- *
- * @param cb
- * 	Callback to generate secondary keys. If NULL,
- * 	*skey will default to the primary value pointer.
+ * @param[in] hd   Secondary (index) map handle.
+ * @param[in] link Primary (source) map handle.
+ * @param[in] cb   Callback to produce secondary
+ *                 keys. NULL → use primary value.
  */
 void qmap_assoc(uint32_t hd,
-		uint32_t link, qmap_assoc_t cb);
+                uint32_t link,
+                qmap_assoc_t cb);
 
-/* Start iteration.
- *
- * @param key
- *  	NULL to start at the beginning; or a key to seek-start.
- *
- * @returns
- * 	A cursor handle.
+/** @} */
+
+/** @defgroup qmap_iteration Qmap iteration
+ *  @brief Iteration through map contents.
+ *  @see qmap_handle
+ *  @see qmap_common
+ *  @see qmap_assoc
+ *  @see qmap_type
+ *  @{
  */
-uint32_t qmap_iter(uint32_t hd, const void * const key, uint32_t flags);
 
-/* Do iteration.
+/**
+ * @brief Start iteration.
  *
- * @param key
- * 	The address of a pointer to return the key to the user.
- *
- * @param value
- * 	The address of a pointer to return the value to the user.
- *
- * @param cur_id
- *	The cursor handle.
- *
- * @returns
- * 	1 if an item was produced; 0 if no more items.
+ * @param[in] hd    Map handle.
+ * @param[in] key   Starting key or NULL.
+ * @param[in] flags QM_RANGE valid.
+ * @return          Cursor handle.
  */
-int qmap_next(const void **key, const void **value,
-		uint32_t cur_id);
+uint32_t qmap_iter(uint32_t hd,
+                   const void * const key,
+                   uint32_t flags);
 
-/* Exit iteration early (optional).
- * Prevents cursor handle growth; otherwise no side effects.
+/**
+ * @brief Fetch next key/value.
  *
- * @param cur_id
- * 	Cursor handle.
+ * @param[out] key    Pointer to key.
+ * @param[out] value  Pointer to value.
+ * @param[in]  cur_id Cursor handle.
+ * @return            1 if valid, 0 if done.
+ */
+int qmap_next(const void **key,
+              const void **value,
+              uint32_t cur_id);
+
+/**
+ * @brief End iteration early.
+ *
+ * @param[in] cur_id Cursor handle.
  */
 void qmap_fin(uint32_t cur_id);
 
-/* Measure callback type, to measure a key that
- * is of variable or dynamic size.
+/** @} */
+
+/** @defgroup qmap_type Qmap type customization
+ *  @brief Functions for registering and managing key/value types.
+ *  @see qmap_handle
+ *  @see qmap_common
+ *  @see qmap_assoc
+ *  @see qmap_iteration
+ *  @{
+ */
+
+/**
+ * @brief Callback to measure variable-size keys.
  *
- * @param data
- * 	The pointer to the key you want to measure.
+ * Keys of dynamic length need measurement when
+ * hashing/comparing beyond pointer equality.
  *
- * @returns
- * 	The size of the contents.
- * 	
- * Semantics: Keys that are not of fixed size need a
- * way to be measured, in case we are not using just
- * the pointers for comparison and hashing.
+ * @param[in] data Pointer to key.
+ * @return         Key size in bytes.
  */
 typedef size_t qmap_measure_t(const void *data);
 
-/* Register a type of fixed length for hashing and
- * comparing contents.
+/**
+ * @brief Register a fixed-length type.
  *
- * @param len
- * 	The length of the type.
- *
- * @returns
- * 	The type's id.
+ * @param[in] len Length in bytes.
+ * @return        Type ID.
  */
 uint32_t qmap_reg(size_t len);
 
+/**
+ * @brief Comparison callback type.
+ *
+ * @param[in] a   First object.
+ * @param[in] b   Second object.
+ * @param[in] len Length in bytes.
+ * @return        <0, 0, or >0.
+ */
 typedef int qmap_cmp_t(
-		const void * const a,
-		const void * const b,
-		size_t len);
+  const void * const a,
+  const void * const b,
+  size_t len);
 
-void
-qmap_cmp_set(uint32_t ref, qmap_cmp_t *cmp);
+/**
+ * @brief Assign comparison function to a type.
+ *
+ * @param[in] ref Type ID.
+ * @param[in] cmp Comparison callback.
+ */
+void qmap_cmp_set(uint32_t ref,
+                  qmap_cmp_t *cmp);
 
-/* Register a type of variable length for hashing
- * and comparing contents.
+/**
+ * @brief Register a variable-length type.
  *
- * @param measure
- * 	The callback used to determine the size.
- *
- * @returns
- * 	The type's id.
+ * @param[in] measure Size-measuring callback.
+ * @return            Type ID.
  */
 uint32_t qmap_mreg(qmap_measure_t *measure);
 
-/* Return the length of a certain element in memory.
+/**
+ * @brief Get the byte length of an element.
  *
- * @param type_id
- * 	The type of element.
- *
- * @param data
- * 	The element's data.
- *
- * @returns
- * 	The length of it.
+ * @param[in] type_id Type ID.
+ * @param[in] data    Element pointer.
+ * @return            Size in bytes.
  */
-size_t qmap_len(uint32_t type_id, const void *data);
+size_t qmap_len(uint32_t type_id,
+                const void *data);
 
-#endif
+/** @} */
+
+#endif /* QMAP_H */
