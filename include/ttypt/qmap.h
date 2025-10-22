@@ -1,10 +1,11 @@
 #ifndef QMAP_H
 #define QMAP_H
 
+#include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
 
-#define QM_MISS ((unsigned) -1)
+#define QM_MISS ((uint32_t) -1)
 
 enum qmap_flags {
 	// QM_AINDEX: puts with NULL key yield
@@ -58,14 +59,14 @@ enum qmap_if {
  * @returns
  * 	The map's handle for later reference.
  */
-unsigned qmap_open(unsigned ktype, unsigned vtype,
-		unsigned mask, unsigned flags);
+uint32_t qmap_open(uint32_t ktype, uint32_t vtype,
+		uint32_t mask, uint32_t flags);
 
 /* Close a qmap
  *
  * @param hd	The handle
  */
-void qmap_close(unsigned hd);
+void qmap_close(uint32_t hd);
 
 /* Get a table position from a key
  *
@@ -74,7 +75,7 @@ void qmap_close(unsigned hd);
  *
  * @returns	A pointer to the value or NULL if not found.
  */
-const void *qmap_get(unsigned hd, const void * const key);
+const void *qmap_get(uint32_t hd, const void * const key);
 
 /* Put a pair into the table.
  *
@@ -92,7 +93,7 @@ const void *qmap_get(unsigned hd, const void * const key);
  * @returns
  * 	The position your value should be stored at.
  */
-unsigned qmap_put(unsigned hd,
+uint32_t qmap_put(uint32_t hd,
 		const void * const key,
 		const void * const value);
 
@@ -101,14 +102,14 @@ unsigned qmap_put(unsigned hd,
  * @param hd	The handle.
  * @param key	The key to delete.
  */
-void qmap_del(unsigned hd, const void * const key);
+void qmap_del(uint32_t hd, const void * const key);
 
 /* Drop all of them contents.
  *
  * @param hd
  * 	The handle.
  */
-void qmap_drop(unsigned hd);
+void qmap_drop(uint32_t hd);
 
 /* Association callback type
  *
@@ -142,8 +143,8 @@ typedef void qmap_assoc_t(
  * 	Callback to generate secondary keys. If NULL,
  * 	*skey will default to the primary value pointer.
  */
-void qmap_assoc(unsigned hd,
-		unsigned link, qmap_assoc_t cb);
+void qmap_assoc(uint32_t hd,
+		uint32_t link, qmap_assoc_t cb);
 
 /* Start iteration.
  *
@@ -153,7 +154,7 @@ void qmap_assoc(unsigned hd,
  * @returns
  * 	A cursor handle.
  */
-unsigned qmap_iter(unsigned hd, const void * const key, unsigned flags);
+uint32_t qmap_iter(uint32_t hd, const void * const key, uint32_t flags);
 
 /* Do iteration.
  *
@@ -170,7 +171,7 @@ unsigned qmap_iter(unsigned hd, const void * const key, unsigned flags);
  * 	1 if an item was produced; 0 if no more items.
  */
 int qmap_next(const void **key, const void **value,
-		unsigned cur_id);
+		uint32_t cur_id);
 
 /* Exit iteration early (optional).
  * Prevents cursor handle growth; otherwise no side effects.
@@ -178,7 +179,7 @@ int qmap_next(const void **key, const void **value,
  * @param cur_id
  * 	Cursor handle.
  */
-void qmap_fin(unsigned cur_id);
+void qmap_fin(uint32_t cur_id);
 
 /* Measure callback type, to measure a key that
  * is of variable or dynamic size.
@@ -204,7 +205,7 @@ typedef size_t qmap_measure_t(const void *data);
  * @returns
  * 	The type's id.
  */
-unsigned qmap_reg(size_t len);
+uint32_t qmap_reg(size_t len);
 
 typedef int qmap_cmp_t(
 		const void * const a,
@@ -212,7 +213,7 @@ typedef int qmap_cmp_t(
 		size_t len);
 
 void
-qmap_cmp_set(unsigned ref, qmap_cmp_t *cmp);
+qmap_cmp_set(uint32_t ref, qmap_cmp_t *cmp);
 
 /* Register a type of variable length for hashing
  * and comparing contents.
@@ -223,7 +224,7 @@ qmap_cmp_set(unsigned ref, qmap_cmp_t *cmp);
  * @returns
  * 	The type's id.
  */
-unsigned qmap_mreg(qmap_measure_t *measure);
+uint32_t qmap_mreg(qmap_measure_t *measure);
 
 /* Return the length of a certain element in memory.
  *
@@ -236,6 +237,6 @@ unsigned qmap_mreg(qmap_measure_t *measure);
  * @returns
  * 	The length of it.
  */
-size_t qmap_len(unsigned type_id, const void *data);
+size_t qmap_len(uint32_t type_id, const void *data);
 
 #endif

@@ -2,12 +2,13 @@
 #define IDM_H
 
 #include "./queue.h"
+#include <stdint.h>
 #include <stdlib.h>
 
-#define IDM_MISS ((unsigned) -1)
+#define IDM_MISS ((uint32_t) -1)
 
 typedef struct ids_item {
-	unsigned value;
+	uint32_t value;
 	SLIST_ENTRY(ids_item) entry;
 } idsi_t;
 
@@ -17,7 +18,7 @@ typedef struct ids ids_t;
 
 typedef struct {
 	ids_t free;
-	unsigned last;
+	uint32_t last;
 } idm_t;
 
 static inline
@@ -27,7 +28,7 @@ ids_t ids_init(void) {
 	return list;
 }
 
-static inline void ids_free(ids_t *ids, unsigned id) {
+static inline void ids_free(ids_t *ids, uint32_t id) {
 	idsi_t *item;
 
 	SLIST_FOREACH(item, ids, entry) {
@@ -38,7 +39,7 @@ static inline void ids_free(ids_t *ids, unsigned id) {
 }
 
 static inline
-void ids_push(ids_t *list, unsigned id) {
+void ids_push(ids_t *list, uint32_t id) {
 	idsi_t *item = (struct ids_item *)
 		malloc(sizeof(idsi_t));
 	item->value = id;
@@ -46,12 +47,12 @@ void ids_push(ids_t *list, unsigned id) {
 }
 
 static inline
-unsigned ids_pop(ids_t *list) {
+uint32_t ids_pop(ids_t *list) {
 	idsi_t *popped = SLIST_FIRST(list);
-	unsigned ret;
+	uint32_t ret;
 
 	if (!popped)
-		return (unsigned) IDM_MISS;
+		return (uint32_t) IDM_MISS;
 
 	ret = popped->value;
 	SLIST_REMOVE_HEAD(list, entry);
@@ -65,7 +66,7 @@ void ids_drop(ids_t *list) {
 }
 
 static inline
-unsigned ids_peek(ids_t *list) {
+uint32_t ids_peek(ids_t *list) {
 	idsi_t *top = SLIST_FIRST(list);
 	return top ? top->value : IDM_MISS;
 }
@@ -76,7 +77,7 @@ idsi_t *ids_iter(ids_t *list) {
 }
 
 static inline int
-ids_next(unsigned *id, idsi_t **cur) {
+ids_next(uint32_t *id, idsi_t **cur) {
 	idsi_t *prev = *cur;
 	if (!prev)
 		return 0;
@@ -100,8 +101,8 @@ void idm_drop(idm_t *idm) {
 }
 
 static inline
-unsigned idm_push(idm_t *idm, unsigned n) {
-	unsigned i;
+uint32_t idm_push(idm_t *idm, uint32_t n) {
+	uint32_t i;
 
 	if (idm->last > n) {
 		ids_free(&idm->free, n);
@@ -116,7 +117,7 @@ unsigned idm_push(idm_t *idm, unsigned n) {
 }
 
 static inline
-int idm_del(idm_t *idm, unsigned id) {
+int idm_del(idm_t *idm, uint32_t id) {
 	if (idm->last <= id)
 		return 1;
 	else if (id + 1 == idm->last) {
@@ -129,8 +130,8 @@ int idm_del(idm_t *idm, unsigned id) {
 }
 
 static inline
-unsigned idm_new(idm_t *idm) {
-	unsigned ret = ids_pop(&idm->free);
+uint32_t idm_new(idm_t *idm) {
+	uint32_t ret = ids_pop(&idm->free);
 
 	if (ret == IDM_MISS)
 		return idm->last++;
@@ -143,7 +144,7 @@ unsigned idm_new(idm_t *idm) {
 static inline void
 idm_debug(idm_t *idm) {
 	idsi_t *item;
-	unsigned i;
+	uint32_t i;
 
 	fprintf(stderr, "last %u free", idm->last);
 	SLIST_FOREACH(item, &idm->free, entry)
