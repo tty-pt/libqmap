@@ -105,9 +105,10 @@ type_cmp(unsigned hd, unsigned mbr, const void *a, void *b)
 unsigned gen_open(enum dbtype type, unsigned flags) {
 	dbtype_t *dbtype = &dbtypes[type];
 
-	unsigned hd = qmap_open((*dbtype)[QM_KEY],
-				(*dbtype)[QM_VALUE],
-				DB_MASK, flags);
+	unsigned hd = qmap_open(NULL, NULL,
+			(*dbtype)[QM_KEY],
+			(*dbtype)[QM_VALUE],
+			DB_MASK, flags);
 
 	hd_meta[hd].type = type;
 	hd_meta[hd].flags = flags;
@@ -132,7 +133,7 @@ _gen_get(unsigned hd, void *key, const void *value, void *expects, int reverse)
 		rbad = good;
 	}
 
-	printf("gen_get_test(%u, ", hd);
+	printf("gen_get_test(");
 	type_print(hd, QM_KEY, key);
 	printf(", ");
 	type_print(hd, QM_VALUE, value);

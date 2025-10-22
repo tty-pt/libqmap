@@ -1,43 +1,43 @@
 first
-gen_get_test(0, 3, hello) = hello ✅
-gen_get_test(0, 5, hi) = hi ✅
-gen_get_test(0, 3, hello) = -1 ✅
+gen_get_test(3, hello) = hello ✅
+gen_get_test(5, hi) = hi ✅
+gen_get_test(3, hello) = -1 ✅
 second
-gen_get_test(0, hello, 9) = 9 ✅
-gen_get_test(0, hi, 7) = 7 ✅
+gen_get_test(hello, 9) = 9 ✅
+gen_get_test(hi, 7) = 7 ✅
 third
-gen_get_test(0, 3, 5) = 5 ✅
-gen_get_test(0, 9, 7) = 7 ✅
+gen_get_test(3, 5) = 5 ✅
+gen_get_test(9, 7) = 7 ✅
 ITER '3' - '5'
 ITER '9' - '7'
 fourth
-gen_get_test(0, 3, hello) = hello ✅
-gen_get_test(0, 9, hi) = hi ✅
-gen_get_test(1, hello, 3) = 3 ✅
-gen_get_test(1, hi, 9) = 9 ✅
+gen_get_test(3, hello) = hello ✅
+gen_get_test(9, hi) = hi ✅
+gen_get_test(hello, 3) = 3 ✅
+gen_get_test(hi, 9) = 9 ✅
 fifth
-gen_get_test(0, hello, 3) = 3 ✅
-gen_get_test(0, hi, 9) = 9 ✅
+gen_get_test(hello, 3) = 3 ✅
+gen_get_test(hi, 9) = 9 ✅
 fifth two-way
-gen_get_test(1, 3, hello) = hello ✅
-gen_get_test(1, 9, hi) = hi ✅
+gen_get_test(3, hello) = hello ✅
+gen_get_test(9, hi) = hi ✅
 sixth
-gen_get_test(0, hello, hellov) = hellov ✅
-gen_get_test(0, hi, hiv) = hiv ✅
-gen_get_test(1, hellov, hello) = hello ✅
-gen_get_test(1, hiv, hi) = hi ✅
+gen_get_test(hello, hellov) = hellov ✅
+gen_get_test(hi, hiv) = hiv ✅
+gen_get_test(hellov, hello) = hello ✅
+gen_get_test(hiv, hi) = hi ✅
 seventh
-gen_get_test(0, hello, olleh) = olleh ✅
-gen_get_test(0, hi, ih) = ih ✅
-gen_get_test(0, ola, alo) = alo ✅
+gen_get_test(hello, olleh) = olleh ✅
+gen_get_test(hi, ih) = ih ✅
+gen_get_test(ola, alo) = alo ✅
 ITER 'hello' - 'olleh'
 ITER 'hi' - 'ih'
 ITER 'ola' - 'alo'
 keyed iter
 ITER 'hello' - 'olleh'
-gen_get_test(1, alo, (null)) = -1 ✅
-gen_get_test(1, olleh, hello) = hello ✅
-gen_get_test(1, ih, hi) = hi ✅
+gen_get_test(alo, (null)) = -1 ✅
+gen_get_test(olleh, hello) = hello ✅
+gen_get_test(ih, hi) = hi ✅
 reverse iter
 ITER 'olleh' - 'hello'
 ITER 'ih' - 'hi'
@@ -47,9 +47,9 @@ final iter
 ITER 'hello' - 'olleh'
 ITER 'hi' - 'ih'
 eighth
-gen_get_test(0, 0, hello) = hello ✅
-gen_get_test(0, 1, hi) = hi ✅
-gen_get_test(0, 2, ola) = ola ✅
+gen_get_test(0, hello) = hello ✅
+gen_get_test(1, hi) = hi ✅
+gen_get_test(2, ola) = ola ✅
 ITER '0' - 'hello'
 ITER '1' - 'hi'
 ITER '2' - 'ola'
@@ -58,18 +58,79 @@ ITER 'hello' - '0'
 ITER 'hi' - '1'
 ITER 'ola' - '2'
 tenth
-gen_get_test(0, 0, hello) = hello ✅
-gen_get_test(0, 0, hi) = hi ✅
-gen_get_test(0, 1, ola) = ola ✅
+gen_get_test(0, hello) = hello ✅
+gen_get_test(0, hi) = hi ✅
+gen_get_test(1, ola) = ola ✅
 ITER '0' - 'hi'
 ITER '1' - 'ola'
 Keyed iter
 ITER '0' - 'hi'
 eleventh
-gen_get_test(0, 3, 2) = 2 ✅
-gen_get_test(0, 3, 4) = 4 ✅
-gen_get_test(0, 1, 3) = 3 ✅
+gen_get_test(3, 2) = 2 ✅
+gen_get_test(3, 4) = 4 ✅
+gen_get_test(1, 3) = 3 ✅
 ITER '3' - '4'
 ITER '1' - '3'
 Keyed iter
 ITER '3' - '4'
+twelfth
+Testing QM_SORTED + QM_RANGE (STOS map)
+gen_get_test(delta, d) = d ✅
+gen_get_test(alpha, a) = a ✅
+gen_get_test(gamma, g) = g ✅
+gen_get_test(beta, b) = b ✅
+gen_iter_check(hd=2, start_key=NULL, flags=0x1)
+  > iter 0: key=alpha ✅
+  > iter 1: key=beta ✅
+  > iter 2: key=delta ✅
+  > iter 3: key=gamma ✅
+  > RESULT: all 4 items correct ✅
+gen_iter_check(hd=2, start_key=beta, flags=0x1)
+  > iter 0: key=beta ✅
+  > iter 1: key=delta ✅
+  > iter 2: key=gamma ✅
+  > RESULT: all 3 items correct ✅
+gen_iter_check(hd=2, start_key=charlie, flags=0x1)
+  > iter 0: key=delta ✅
+  > iter 1: key=gamma ✅
+  > RESULT: all 2 items correct ✅
+gen_iter_check(hd=2, start_key=zulu, flags=0x1)
+  > RESULT: all 0 items correct ✅
+Testing dirty rebuild (del/put)
+gen_get_test(gamma, g) = -1 ✅
+gen_get_test(epsilon, e) = e ✅
+gen_get_test(bravo, b2) = b2 ✅
+gen_iter_check(hd=2, start_key=NULL, flags=0x1)
+  > iter 0: key=alpha ✅
+  > iter 1: key=bravo ✅
+  > iter 2: key=delta ✅
+  > iter 3: key=epsilon ✅
+  > RESULT: all 4 items correct ✅
+thirteenth
+Testing QM_SORTED + QM_RANGE (UTOS map)
+gen_get_test(50, fifty) = fifty ✅
+gen_get_test(10, ten) = ten ✅
+gen_get_test(30, thirty) = thirty ✅
+gen_get_test(20, twenty) = twenty ✅
+gen_iter_check(hd=2, start_key=NULL, flags=0x1)
+  > iter 0: key=10 ✅
+  > iter 1: key=20 ✅
+  > iter 2: key=30 ✅
+  > iter 3: key=50 ✅
+  > RESULT: all 4 items correct ✅
+gen_iter_check(hd=2, start_key=30, flags=0x1)
+  > iter 0: key=30 ✅
+  > iter 1: key=50 ✅
+  > RESULT: all 2 items correct ✅
+fourteenth
+Testing QM_RANGE fallback (non-SORTED map)
+gen_get_test(delta, d) = d ✅
+gen_get_test(alpha, a) = a ✅
+gen_get_test(gamma, g) = g ✅
+Full iteration (should be hash/insert order, NOT alphabetical):
+ITER 'delta' - 'd'
+ITER 'alpha' - 'a'
+ITER 'gamma' - 'g'
+Range iteration from 'c' (should be 'delta', 'gamma' in any order):
+ITER 'delta' - 'd'
+ITER 'gamma' - 'g'
