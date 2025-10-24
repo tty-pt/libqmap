@@ -49,6 +49,7 @@ enum qm_internal_flags {
 typedef struct {
 	uint32_t types[2], n, m, mask, flags,
 		 phd, sorted_n, iflags, dbid;
+	const char *file;
 } qmap_head_t;
 
 typedef struct {
@@ -401,6 +402,7 @@ qmap_open(const char *filename,
 	uint32_t hd = _qmap_open(ktype, vtype, mask, flags);
 	qmap_head_t *head = &qmap_heads[hd];
 
+	head->file = filename;
 	if (database)
 		head->dbid = XXH32(database, strlen(database), QM_SEED);
 	else
@@ -848,6 +850,7 @@ qmap_drop(uint32_t hd)
 void /* API */
 qmap_close(uint32_t hd)
 {
+	qmap_head_t *head = &qmap_heads[hd];
 	qmap_t *qmap = &qmaps[hd];
 	idsi_t *cur;
 	uint32_t ahd;
@@ -872,6 +875,14 @@ qmap_close(uint32_t hd)
 		free(qmap->table);
 	qmap->omap = NULL;
 	idm_del(&idm, hd);
+
+	// remove any file associations so we don't try
+	// saving it to a file after it is closed.
+	const qmap_file_t *file = qmap_get(qmap_files_hd, head->file);
+	if (!file)
+		return;
+	ids_remove((ids_t *) &file->ids, hd);
+
 }
 
 void /* API */

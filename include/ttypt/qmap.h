@@ -109,6 +109,7 @@ uint32_t qmap_open(const char *filename,
  *
  * Walks the internal cache, computes file sizes,
  * and performs mmap/memcpy writes.
+ * (automatic at exit)
  */
 void qmap_save(void);
 

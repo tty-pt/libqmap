@@ -7,6 +7,8 @@ LDLIBS-test := -lqmap
 LDLIBS-qmap := -lqmap
 LDLIBS-save_test := -lqmap
 
+libqmap-obj-y := src/idm.o
+
 CFLAGS += -g
 
 include ../mk/include.mk

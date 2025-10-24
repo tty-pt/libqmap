@@ -603,7 +603,4 @@ main(int argc, char *argv[])
 	case 'g': gen_get(optarg); break;
 	case 'r': reverse = !reverse; break;
 	}
-
-	if (!(flags & QH_RDONLY))
-		qmap_save();
 }
