@@ -1008,7 +1008,7 @@ _qmap_calc_size(uint32_t hd)
 	qmap_head_t *head = &qmap_heads[hd];
 	uint32_t ktype = head->types[QM_KEY];
 	uint32_t vtype = head->types[QM_VALUE];
-	size_t total_size = sizeof(size_t) + sizeof(head->n);
+	size_t total_size = sizeof(uint32_t) + sizeof(size_t) + sizeof(head->n);
 	uint32_t cur = qmap_iter(hd, NULL, 0);
 	const void *key, *value;
 

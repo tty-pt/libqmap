@@ -2,69 +2,69 @@
  * @page qmap qmap(1)
  * @brief Qmap command-line tool — create, query, and associate persistent maps.
  *
- * CLI simples para a engine Qmap. Substitui o antigo **qdb** e usa diretamente a libqmap.
+ * Simple CLI for the Qmap engine. Replaces the old **qdb** and links directly against libqmap.
  *
  * ## Overview
- * Cria/abre bases chave-valor em disco ou memória; permite consultas, associações, espelhos e iteração.
- * Suporta tipos *unsigned* e *string*. **Auto-index só é ativado se o tipo de chave for `a`.**
+ * Creates/opens key-value databases in memory or on disk; supports queries, associations, mirrors, and iteration.
+ * Supports *unsigned* and *string* types. **Auto-index is only active if the key type is `a`.**
  *
- * ## Instalação
- * Ver: <https://github.com/tty-pt/ci/blob/main/docs/install.md#install-ttypt-packages>
+ * ## Installation
+ * See: <https://github.com/tty-pt/ci/blob/main/docs/install.md#install-ttypt-packages>
  *
  * ## Usage
  * ```
  * qmap [-qa ARG] [[-rl] [-Rpdg ARG] ...] file[[:k]:v]
  * ```
- * Executa `qmap -?` para a ajuda completa.
+ * Run `qmap -?` to show full help.
  *
  * ### Options
  * - **-r**
- *   Inverte a direção (troca chave/valor nas operações).
+ *   Reverse direction (swap key/value lookup).
  * - **-l**
- *   Lista todos os pares.
+ *   List all key/value pairs.
  * - **-L**
- *   Lista “missing” (**requer `-q`** para base correspondente).
+ *   List “missing” values (**requires `-q`** to specify the paired database).
  * - **-q** *file[:k[:v]]*
- *   Base para *string lookups* e impressão (cadeia de consulta).
+ *   Query database for lookups and printing.
  * - **-a** *file[:k[:v]]*
- *   Base para *reversed string lookups* e impressão associada.
+ *   Associate database for reverse lookups and printing.
  * - **-R** *KEY*
- *   Valor aleatório para *KEY* (`.` = qualquer).
+ *   Random value for *KEY* (`.` = any).
  * - **-p** *KEY[:VAL]*
- *   Insere/atualiza par.
+ *   Insert or update a key/value pair.
  * - **-d** *KEY[:VAL]*
- *   Apaga par(es).
+ *   Delete key/value pair(s).
  * - **-g** *KEY*
- *   Obtém valor(es) de uma chave (`.` = todas).
+ *   Get value(s) for a key (`.` = all).
  * - **-x**
- *   Em impressão de associações, pára no primeiro resultado.
+ *   When printing associations, stop after the first result.
  * - **-k**
- *   Também imprime as chaves (em `-g` e `-R`).
+ *   Also print keys (for `-g` and `-R`).
  *
  * ### Type specifiers
  * - **u** — unsigned integer
  * - **s** — string
- * - **a** — só chave: unsigned com auto-index (default **não** é `a`)
+ * - **a** — key only: unsigned with auto-index (default is **not** `a`)
  *
- * ### Exemplos
+ * ### Examples
  * @code
- * # IDs automáticos: chave 'a', valores string
- * qmap -p Mathew owners.db:a:s              # → id do Mathew
- * qmap -p cat    pets.db:a:s                # → id do 'cat'
+ * # Automatic IDs: key 'a', values as strings
+ * qmap -p Mathew owners.db:a:s              # → Mathew’s ID
+ * qmap -p cat    pets.db:a:s                # → cat’s ID
  *
- * # Associação (sem duplicados)
+ * # Association (no duplicates)
  * qmap -p 1:1 assoc.db:u:u                  # owner_id:pet_id
  *
- * # Ver o animal do Mathew (usa -q/-a para resolver nomes/ids)
+ * # Get Mathew’s pet (use -q/-a to resolve names/IDs)
  * qmap -q owners.db:a:s -a pets.db:a:s -g Mathew assoc.db:u:u
  *
- * # Aleatório para uma KEY
+ * # Random value for a KEY
  * qmap -q owners.db:a:s -a pets.db:a:s -R Mathew assoc.db:u:u
  * @endcode
  *
  * ### Notes
- * - `-r` é contra-intuitivo: ligado, procuras **pelas chaves primárias**.
- * - Só grava no fim se a base principal não estiver em read-only (i.e., usaste `-p`/`-d`).
+ * - `-r` is counter-intuitive: when enabled, lookups are done **by primary keys**.
+ * - Databases are only saved at exit if not opened read-only (i.e., you used `-p`/`-d`).
  *
  * @see qmap_handle
  * @see qmap_common
@@ -341,7 +341,7 @@ static inline void _gen_get(void) {
 }
 
 static inline void gen_rand(void) {
-	unsigned count = 0, rand;
+	unsigned count = 0, randn;
 	unsigned c;
 	const void *iter_key = gen_lookup(optarg);
 
@@ -359,13 +359,13 @@ static inline void gen_rand(void) {
 		return;
 	}
 
-	rand = random() % count;
+	randn = rand() % count;
 	c = qmap_iter(prim_hd + !reverse, iter_key, 0);
 
 	while (qmap_next(&key_ptr, &value_ptr, c))
 		if (!assoc_exists(key_ptr))
 			continue;
-		else if ((--count) <= rand) {
+		else if ((--count) <= randn) {
 			qmap_fin(c);
 			break;
 		}
@@ -592,7 +592,7 @@ main(int argc, char *argv[])
 
 	optind = 1;
 	prim_hd = gen_open(fname, flags);
-	srandom(time(NULL));
+	srand(time(NULL));
 
 	while ((ch = getopt(argc, argv, optstr)) != -1) switch (ch) {
 	case 'R': gen_rand(); break;

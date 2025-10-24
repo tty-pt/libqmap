@@ -22,6 +22,7 @@ adb=a.db:a:u
 bdb=b.db:a
 sdb=s.db
 cdb=c.db:2u:u
+ddb=d.db
 assert 0 $qmap -p 0:1 $adb
 assert 01v $qmap -p hi -p hello $bdb
 assert 01 $qmap -l $adb
@@ -89,6 +90,10 @@ assert assoc-bail $qmap -a $bdb -l $adb
 assert assoc3 $qmap -a $bdb -a $sdb -l $adb
 assert assoc-bail $qmap -xa $bdb -a $sdb -l $adb
 assert assoc-bail2 $qmap -xa $bdb -a $sdb -rl $adb
+
+assert hikey $qmap -p hi:Hello2 $ddb
+assert hi2key $qmap -p hi2:Hello3 $ddb
+assert xxd-1 xxd $ddb
 
 # TODO test random (normal and reverse?)
 # TODO test AINDEX col insert id
