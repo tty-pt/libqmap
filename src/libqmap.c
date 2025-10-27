@@ -878,6 +878,8 @@ qmap_close(uint32_t hd)
 
 	// remove any file associations so we don't try
 	// saving it to a file after it is closed.
+	if (!head->file)
+		return;
 	const qmap_file_t *file = qmap_get(qmap_files_hd, head->file);
 	if (!file)
 		return;
