@@ -466,7 +466,7 @@ __attribute__((destructor))
 static void qmap_destruct(void) {
 	qmap_save();
 
-	for (uint32_t i = 0; i < idm.last; i++)
+	for (uint32_t i = idm.last; i-- > 0; )
 		qmap_close(i);
 
 	idm_drop(&cursor_idm);
@@ -477,6 +477,9 @@ static void qmap_destruct(void) {
 
 	while (qmap_next(&key, &value, cur))
 		file_close((qmap_file_t *) value);
+
+	qmap_close(qmap_dbs_hd);
+	qmap_close(qmap_files_hd);
 }
 
 __attribute__((constructor))
@@ -484,6 +487,10 @@ static void
 qmap_init(void)
 {
 	qmap_type_t *type;
+
+	memset(qmaps, 0, sizeof(qmaps));
+	memset(qmap_heads, 0, sizeof(qmap_heads));
+
 	idm = idm_init();
 	cursor_idm = idm_init();
 

@@ -6,7 +6,7 @@
  *
  * ## Overview
  * Creates/opens key-value databases in memory or on disk; supports queries, associations, mirrors, and iteration.
- * Supports *unsigned* and *string* types. **Auto-index is only active if the key type is `a`.**
+ * Supports *uint32_t* and *string* types. **Auto-index is only active if the key type is `a`.**
  *
  * ## Installation
  * See: <https://github.com/tty-pt/ci/blob/main/docs/install.md#install-ttypt-packages>
@@ -42,9 +42,9 @@
  *   Also print keys (for `-g` and `-R`).
  *
  * ### Type specifiers
- * - **u** — unsigned integer
+ * - **u** — uint32_t integer
  * - **s** — string
- * - **a** — key only: unsigned with auto-index (default is **not** `a`)
+ * - **a** — key only: uint32_t with auto-index (default is **not** `a`)
  *
  * ### Examples
  * @code
@@ -92,7 +92,7 @@
 #define QH_RDONLY 0x32
 
 typedef struct {
-	unsigned types[2];
+	uint32_t types[2];
 } qmape_meta_t;
 
 typedef void qmape_print_t(const void *data);
@@ -109,15 +109,15 @@ enum qmape_mbr {
 qmape_meta_t metas[QM_MAX];
 qmape_type_t types[8];
 
-unsigned QH_NOT_NEW = 1;
+uint32_t QH_NOT_NEW = 1;
 
-unsigned prim_hd, aux_hd;
+uint32_t prim_hd, aux_hd;
 
 const void *value_ptr, *key_ptr;
 char *col;
 
 typedef struct {
-	unsigned hd, n;
+	uint32_t hd, n;
 } aq_t;
 
 enum aq {
@@ -127,12 +127,12 @@ enum aq {
 
 aq_t aqs[2];
 
-unsigned reverse = 0, bail = 0, print_keys = 0;
+uint32_t reverse = 0, bail = 0, print_keys = 0;
 
-unsigned qmap_get_type;
+uint32_t qmap_get_type;
 const void **qmap_get_ptr;
 
-void qmape_print(unsigned hd, enum qmape_mbr t,
+void qmape_print(uint32_t hd, enum qmape_mbr t,
 		const void *buf)
 {
 	qmape_meta_t *meta = &metas[hd];
@@ -157,16 +157,16 @@ usage(char *prog)
 	fprintf(stderr, "        -x               when printing associations, bail on first result\n");
 	fprintf(stderr, "        -k               also print keys (for get and rand).\n");
 	fprintf(stderr, "    'k' and 'v' are key and value types. Supported values:\n");
-	fprintf(stderr, "         u               unsigned\n");
+	fprintf(stderr, "         u               uint32_t\n");
 	fprintf(stderr, "         s               string (default value type)\n");
-	fprintf(stderr, "         a               key only! unsigned automatic index (default)\n");
+	fprintf(stderr, "         a               key only! uint32_t automatic index (default)\n");
 	fprintf(stderr, "         2<base-type>    key only! allows duplicates\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Use '.' as the KEY for all keys!\n");
 }
 
-static inline unsigned
-qmape_type(unsigned phd, enum qmape_mbr t, unsigned reverse)
+static inline uint32_t
+qmape_type(uint32_t phd, enum qmape_mbr t, uint32_t reverse)
 {
 	qmape_meta_t *meta = &metas[phd];
 	return meta->types[reverse ? !t : t];
@@ -176,19 +176,19 @@ static inline const void *rec_query(
 		enum aq aq,
 		const void *tbuf,
 		const void *buf,
-		unsigned tmprev)
+		uint32_t tmprev)
 {
 	tmprev = (aqs[AQ_Q].n & 1) == tmprev;
-	unsigned c2 = qmap_iter(aqs[aq].hd, NULL, 0);
+	uint32_t c2 = qmap_iter(aqs[aq].hd, NULL, 0);
 	ids_t rqs = ids_init();
-	unsigned aux_hd;
+	uint32_t aux_hd;
 	const void *key, *value, *aux2;
 
-	unsigned lktype = qmape_type(prim_hd,
+	uint32_t lktype = qmape_type(prim_hd,
 			KEY, !reverse);
 
 	while (qmap_next(&key, &value, c2)) {
-		aux_hd = * (unsigned *) value;
+		aux_hd = * (uint32_t *) value;
 
 		if (qmape_type(aux_hd, VALUE, tmprev)
 				!= lktype)
@@ -208,7 +208,7 @@ static inline const void *rec_query(
 		ids_push(&rqs, aux_hd + tmprev);
 	}
 
-	while ((aux_hd = ids_pop(&rqs)) != (unsigned) -1) {
+	while ((aux_hd = ids_pop(&rqs)) != (uint32_t) -1) {
 		value = qmap_get(aux_hd, buf);
 		if (!value) {
 			ids_drop(&rqs);
@@ -225,17 +225,17 @@ static inline const void *rec_query(
 }
 
 static inline int gen_cond(int is_value) {
-	unsigned aq_hd = aqs[AQ_Q].hd;
-	unsigned c = qmap_iter(aq_hd, NULL, 0);
-	unsigned rev = !reverse;
-	unsigned type = qmape_type(prim_hd,
+	uint32_t aq_hd = aqs[AQ_Q].hd;
+	uint32_t c = qmap_iter(aq_hd, NULL, 0);
+	uint32_t rev = !reverse;
+	uint32_t type = qmape_type(prim_hd,
 			is_value ? KEY : VALUE,
 			rev);
 	const void *key, *value;
 
 	while (qmap_next(&key, &value, c)) {
 		rev = !rev;
-		unsigned aux_hd = * (unsigned *)
+		uint32_t aux_hd = * (uint32_t *)
 			value;
 		type = qmape_type(aux_hd, KEY, rev);
 	}
@@ -244,10 +244,10 @@ static inline int gen_cond(int is_value) {
 }
 
 inline static const void *
-_gen_lookup(const void **buf, unsigned *uret, char *str,
+_gen_lookup(const void **buf, uint32_t *uret, char *str,
 		enum aq aq, int is_value)
 {
-	unsigned cond = gen_cond(is_value);
+	uint32_t cond = gen_cond(is_value);
 	const void *ret = NULL;
 
 	if (cond)
@@ -267,7 +267,7 @@ _gen_lookup(const void **buf, unsigned *uret, char *str,
 }
 
 static const void *gen_lookup(char *str) {
-	static unsigned aret, bret;
+	static uint32_t aret, bret;
 
 	if (!str || !strcmp(str, "."))
 		return NULL;
@@ -302,13 +302,13 @@ static inline int assoc_exists(const char *key_ptr) {
 static inline void assoc_print(void) {
 	const void *alt_ptr;
 	const void *buf = reverse ? value_ptr : key_ptr;
-	unsigned aux_hd;
-	unsigned aq_hd = aqs[AQ_A].hd;
-	unsigned c2 = qmap_iter(aq_hd, NULL, 0);
+	uint32_t aux_hd;
+	uint32_t aq_hd = aqs[AQ_A].hd;
+	uint32_t c2 = qmap_iter(aq_hd, NULL, 0);
 	const void *key, *value;
 
 	while (qmap_next(&key, &value, c2)) {
-		aux_hd = * (unsigned *)
+		aux_hd = * (uint32_t *)
 			value;
 		putchar(' ');
 
@@ -341,8 +341,8 @@ static inline void _gen_get(void) {
 }
 
 static inline void gen_rand(void) {
-	unsigned count = 0, randn;
-	unsigned c;
+	uint32_t count = 0, randn;
+	uint32_t c;
 	const void *iter_key = gen_lookup(optarg);
 
 	// why iter by key, if we don't support dupes?
@@ -375,8 +375,8 @@ static inline void gen_rand(void) {
 
 static void gen_get(char *str) {
 	const void *iter_key = gen_lookup(str);
-	unsigned c;
-	unsigned nonce = 1, hd;
+	uint32_t c;
+	uint32_t nonce = 1, hd;
 	const void *key;
 
 	if (reverse) {
@@ -414,8 +414,8 @@ static void gen_get(char *str) {
 }
 
 static void gen_list(void) {
-	unsigned c;
-	unsigned cond, aux;
+	uint32_t c;
+	uint32_t cond, aux;
 
 	gen_lookup(NULL);
 	cond = gen_cond(1);
@@ -436,7 +436,7 @@ static void gen_list(void) {
 }
 
 static inline void gen_put(void) {
-	unsigned id;
+	uint32_t id;
 	const void *key;
 
 	gen_lookup(optarg);
@@ -449,7 +449,7 @@ static inline void gen_put(void) {
 }
 
 static inline void gen_list_missing(void) {
-	unsigned c;
+	uint32_t c;
 	gen_lookup(NULL);
 
 	if (!aqs[AQ_Q].n) {
@@ -459,12 +459,12 @@ static inline void gen_list_missing(void) {
 
 	c = qmap_iter(prim_hd + !reverse, NULL, 0);
 	while (qmap_next(&key_ptr, &value_ptr, c)) {
-		unsigned aqs_hd = aqs[AQ_Q].hd;
-		unsigned c2 = qmap_iter(aqs_hd, NULL, 0);
+		uint32_t aqs_hd = aqs[AQ_Q].hd;
+		uint32_t c2 = qmap_iter(aqs_hd, NULL, 0);
 		const void *skey, *sval;
 
 		while (qmap_next(&skey, &sval, c2)) {
-			unsigned ahd = (* (unsigned *)
+			uint32_t ahd = (* (uint32_t *)
 				sval)
 				+ !reverse;
 			key_ptr = qmap_get(ahd, value_ptr);
@@ -474,18 +474,18 @@ static inline void gen_list_missing(void) {
 	}
 }
 
-unsigned _qmape_type(char *which) {
+uint32_t _qmape_type(char *which) {
 	if (*which == 's')
 		return QM_STR;
 	else
 		return QM_HNDL;
 }
 
-unsigned gen_open(char *fname, unsigned flags) {
+uint32_t gen_open(char *fname, uint32_t flags) {
 	char buf[BUFSIZ];
-	unsigned ktype = QM_STR;
-	unsigned vtype = QM_STR;
-	unsigned hd;
+	uint32_t ktype = QM_STR;
+	uint32_t vtype = QM_STR;
+	uint32_t hd;
 
 	strcpy(buf, fname);
 
@@ -526,7 +526,7 @@ unsigned gen_open(char *fname, unsigned flags) {
 }
 
 static void u_print(const void *data) {
-	printf("%u", * (unsigned *) data);
+	printf("%u", * (uint32_t *) data);
 }
 
 static void s_print(const void *data) {
@@ -538,7 +538,7 @@ main(int argc, char *argv[])
 {
 	static char *optstr = "kxla:q:p:d:g:rR:L:?";
 	char *fname = argv[argc - 1], ch;
-	unsigned flags = QH_RDONLY, aux;
+	uint32_t flags = QH_RDONLY, aux;
 
 	if (argc < 2) {
 		usage(*argv);
