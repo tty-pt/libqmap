@@ -376,12 +376,10 @@ _qmap_open(uint32_t ktype, uint32_t vtype,
 	if (flags & QM_SORTED) {
 		qmap->sorted_idx = malloc(sizeof(uint32_t) * len);
 		CBUG(!qmap->sorted_idx, "malloc error (sorted_idx)\n");
-		head->iflags |= QM_SDIRTY;
-	} else {
+	} else
 		qmap->sorted_idx = NULL;
-		head->iflags &= ~QM_SDIRTY;
-	}
 
+	head->iflags |= QM_SDIRTY;
 	head->sorted_n = 0;
 
 	memset(qmap->map, 0xFF, ids_len);
@@ -581,9 +579,7 @@ _qmap_put(uint32_t hd, const void * key,
 
 	qmap->map[id] = n;
 	qmap->omap[n] = rkey;
-
-	if (head->phd == hd && (head->flags & QM_SORTED))
-		head->iflags |= QM_SDIRTY;
+	head->iflags |= QM_SDIRTY;
 
 	return id;
 }
@@ -675,13 +671,12 @@ static void qmap_ndel_topdown(uint32_t hd, uint32_t n){
 	id = qmap_id(hd, key);
 
 	if (head->phd == hd) {
-		if (head->flags & QM_SORTED)
-			head->iflags |= QM_SDIRTY;
 		value = qmap_val(hd, n);
 		free((void *) key);
 		free((void *) value);
 	}
 
+	head->iflags |= QM_SDIRTY;
 	qmap->map[id] = QM_MISS;
 	qmap->omap[n] = NULL;
 	idm_del(&qmap->idm, n);
@@ -979,6 +974,7 @@ _qmap_load(uint32_t hd, const char *mmaped, uint32_t dbid)
 		mm = mval + vlen;
 	}
 
+	head->iflags |= QM_SDIRTY;
 	return mm - mm_start;
 }
 
