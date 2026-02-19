@@ -8,10 +8,11 @@
  * Provides linked-list–based tracking of reusable integer
  * IDs and index allocation routines used internally by Qmap.
  *
- * @license BSD-2-Clause
+ * License: BSD-2-Clause
  */
 
 #include "./queue.h"
+#include <stddef.h>
 #include <stdint.h>
 
 /** @defgroup idm_constants IDM constants
@@ -35,8 +36,8 @@
  * @brief Node representing a stored integer ID.
  */
 typedef struct ids_item {
-    uint32_t value;                 /* Stored ID value. */
-    SLIST_ENTRY(ids_item) entry;    /* List */
+	uint32_t value;                 /* Stored ID value. */
+	SLIST_ENTRY(ids_item) entry;    /* List */
 } idsi_t;
 
 SLIST_HEAD(ids, ids_item);
@@ -46,8 +47,8 @@ typedef struct ids ids_t;
  * @brief Index/ID manager with a free-list and counter.
  */
 typedef struct {
-    ids_t free;     /* Free list of reusable IDs. */
-    uint32_t last;  /* Last issued ID + 1. */
+	ids_t free;     /* Free list of reusable IDs. */
+	uint32_t last;  /* Last issued ID + 1. */
 } idm_t;
 
 /** @} */
@@ -63,9 +64,9 @@ typedef struct {
  * @return Newly initialized empty list.
  */
 static inline ids_t ids_init(void) {
-    struct ids list;
-    SLIST_INIT(&list);
-    return list;
+	struct ids list;
+	SLIST_INIT(&list);
+	return list;
 }
 
 /**
@@ -76,10 +77,10 @@ static inline ids_t ids_init(void) {
  * @return Initialized `idm_t` structure.
  */
 static inline idm_t idm_init(void) {
-    idm_t idm;
-    idm.free = ids_init();
-    idm.last = 0;
-    return idm;
+	idm_t idm;
+	idm.free = ids_init();
+	idm.last = 0;
+	return idm;
 }
 
 /** @} */
@@ -96,8 +97,8 @@ static inline idm_t idm_init(void) {
  * @return Top ID or `IDM_MISS` if empty.
  */
 static inline uint32_t ids_peek(ids_t *list) {
-    idsi_t *top = SLIST_FIRST(list);
-    return top ? top->value : IDM_MISS;
+	idsi_t *top = SLIST_FIRST(list);
+	return top ? top->value : IDM_MISS;
 }
 
 /**
@@ -107,7 +108,7 @@ static inline uint32_t ids_peek(ids_t *list) {
  * @return Pointer to the first node.
  */
 static inline idsi_t *ids_iter(ids_t *list) {
-    return SLIST_FIRST(list);
+	return SLIST_FIRST(list);
 }
 
 /**
@@ -118,12 +119,12 @@ static inline idsi_t *ids_iter(ids_t *list) {
  * @return 1 if valid, 0 if end of list.
  */
 static inline int ids_next(uint32_t *id, idsi_t **cur) {
-    idsi_t *prev = *cur;
-    if (!prev)
-        return 0;
-    *id = prev->value;
-    *cur = SLIST_NEXT(prev, entry);
-    return 1;
+	idsi_t *prev = *cur;
+	if (!prev)
+		return 0;
+	*id = prev->value;
+	*cur = SLIST_NEXT(prev, entry);
+	return 1;
 }
 
 /** @} */

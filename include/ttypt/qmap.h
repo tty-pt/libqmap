@@ -73,6 +73,9 @@ enum qmap_if {
 
 /** @defgroup qmap_handle Qmap open, close and save
  *  @brief Functions for opening, closing and saving maps.
+ *
+ *  @note Qmap uses global state and is not thread-safe.
+ *        File-backed maps are saved automatically at process exit.
  *  @{
  */
 
@@ -87,6 +90,7 @@ enum qmap_if {
  * @param[in] filename Path to file or cache key.
  *                     NULL → in-memory only.
  * @param[in] database Logical name within file.
+ *                     NULL → skip file association.
  * @param[in] ktype    Built-in or registered key
  *                     type.
  * @param[in] vtype    Built-in or registered value
@@ -105,11 +109,11 @@ uint32_t qmap_open(const char *filename,
                    uint32_t flags);
 
 /**
- * @brief Write all open maps to disk.
+ * @brief Write all file-backed maps to disk.
  *
  * Walks the internal cache, computes file sizes,
- * and performs mmap/memcpy writes.
- * (automatic at exit)
+ * and performs mmap/memcpy writes for maps
+ * associated with a file. (automatic at exit)
  */
 void qmap_save(void);
 
@@ -134,6 +138,11 @@ void qmap_close(uint32_t hd);
 /**
  * @brief Retrieve a value by key.
  *
+ * Returned pointers are owned by the map. They remain valid
+ * until the entry is replaced, deleted, or the map is closed.
+ * Do not free the returned pointer. For QM_PTR values, the
+ * returned pointer points to the stored pointer bytes.
+ *
  * @param[in] hd  Map handle.
  * @param[in] key Key to look up.
  * @return        Pointer to value or NULL.
@@ -147,7 +156,8 @@ const void *qmap_get(uint32_t hd,
  * @param[in] hd    Map handle.
  * @param[in] key   Key (NULL if QM_AINDEX).
  * @param[in] value Value to store.
- * @return          Index position for value.
+ * @return          Internal index for the entry. With QM_AINDEX,
+ *                  this is the generated key ID.
  */
 uint32_t qmap_put(uint32_t hd,
                   const void * const key,
@@ -185,6 +195,8 @@ void qmap_drop(uint32_t hd);
  *
  * After association, future puts/dels on the
  * primary will update the secondary.
+ * Deletes on the primary remove corresponding
+ * entries from the secondary.
  *
  * @param[out] skey  Pointer to set secondary key.
  * @param[in]  pkey  Primary key.
@@ -202,6 +214,21 @@ typedef void qmap_assoc_t(
  * @param[in] link Primary (source) map handle.
  * @param[in] cb   Callback to produce secondary
  *                 keys. NULL → use primary value.
+ *
+ * @code
+ * // Build a secondary index from value -> key.
+ * static void value_to_key(const void **skey,
+ *                           const void *pkey,
+ *                           const void *value) {
+ *     (void) pkey;
+ *     *skey = value;
+ * }
+ *
+ * uint32_t primary = qmap_open("data.qmap", "primary",
+ *                              QM_U32, QM_STR,
+ *                              0xFF, QM_MIRROR);
+ * qmap_assoc(primary + 1, primary, value_to_key);
+ * @endcode
  */
 void qmap_assoc(uint32_t hd,
                 uint32_t link,
@@ -215,11 +242,26 @@ void qmap_assoc(uint32_t hd,
  *  @see qmap_common
  *  @see qmap_assoc
  *  @see qmap_type
+ *
+ * @code
+ * // Sorted range scan (requires QM_SORTED in qmap_open).
+ * uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32,
+ *                         0xFF, QM_SORTED);
+ * uint32_t start = 100;
+ * uint32_t cur = qmap_iter(hd, &start, QM_RANGE);
+ * const void *key, *value;
+ * while (qmap_next(&key, &value, cur)) {
+ *     // handle key/value
+ * }
+ * qmap_fin(cur);
+ * @endcode
  *  @{
  */
 
 /**
  * @brief Start iteration.
+ *
+ * Ordered ranges require QM_SORTED.
  *
  * @param[in] hd    Map handle.
  * @param[in] key   Starting key or NULL.
@@ -232,6 +274,10 @@ uint32_t qmap_iter(uint32_t hd,
 
 /**
  * @brief Fetch next key/value.
+ *
+ * Returned pointers are owned by the map. They remain valid
+ * until the entry is replaced, deleted, or the map is closed.
+ * Do not free the returned pointers.
  *
  * @param[out] key    Pointer to key.
  * @param[out] value  Pointer to value.

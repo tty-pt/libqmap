@@ -45,6 +45,8 @@
  * - **u** — uint32_t integer
  * - **s** — string
  * - **a** — key only: uint32_t with auto-index (default is **not** `a`)
+ * - **2&lt;type&gt;** — key only: accepted for future duplicate-key support
+ * - Defaults are **s** for key and value if omitted.
  *
  * ### Examples
  * @code
@@ -60,11 +62,16 @@
  *
  * # Random value for a KEY
  * qmap -q owners.db:a:s -a pets.db:a:s -R Mathew assoc.db:u:u
+ *
+ * # Chained lookups (multiple -q/-a in order)
+ * qmap -q owners.db:a:s -q pets.db:a:s -g Mathew assoc.db:u:u
  * @endcode
  *
  * ### Notes
  * - `-r` is counter-intuitive: when enabled, lookups are done **by primary keys**.
  * - Databases are only saved at exit if not opened read-only (i.e., you used `-p`/`-d`).
+ * - `-q`/`-a` options are processed in order; each entry extends the lookup chain.
+ * - `2<type>` is accepted but duplicate-key behavior is not implemented yet.
  *
  * @see qmap_handle
  * @see qmap_common
@@ -160,9 +167,10 @@ usage(char *prog)
 	fprintf(stderr, "         u               uint32_t\n");
 	fprintf(stderr, "         s               string (default value type)\n");
 	fprintf(stderr, "         a               key only! uint32_t automatic index (default)\n");
-	fprintf(stderr, "         2<base-type>    key only! allows duplicates\n");
+	fprintf(stderr, "         2<base-type>    key only! accepted for future duplicate support\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Use '.' as the KEY for all keys!\n");
+	fprintf(stderr, "-q/-a options are processed in order.\n");
 }
 
 static inline uint32_t
@@ -475,10 +483,14 @@ static inline void gen_list_missing(void) {
 }
 
 uint32_t _qmape_type(char *which) {
+	if (*which == '2' && which[1] != '\0')
+		which++;
 	if (*which == 's')
 		return QM_STR;
-	else
-		return QM_HNDL;
+	if (*which == 'u')
+		return QM_U32;
+	fprintf(stderr, "Invalid type specifier: %s\n", which);
+	exit(EXIT_FAILURE);
 }
 
 uint32_t gen_open(char *fname, uint32_t flags) {
@@ -487,7 +499,11 @@ uint32_t gen_open(char *fname, uint32_t flags) {
 	uint32_t vtype = QM_STR;
 	uint32_t hd;
 
-	strcpy(buf, fname);
+	int written = snprintf(buf, sizeof(buf), "%s", fname);
+	if (written < 0 || (size_t) written >= sizeof(buf)) {
+		fprintf(stderr, "Filename too long\n");
+		exit(EXIT_FAILURE);
+	}
 
 	char *first_col = strchr(buf, ':'), *second_col;
 
@@ -537,7 +553,7 @@ int
 main(int argc, char *argv[])
 {
 	static char *optstr = "kxla:q:p:d:g:rR:L:?";
-	char *fname = argv[argc - 1], ch;
+	char *fname = NULL, ch;
 	uint32_t flags = QH_RDONLY, aux;
 
 	if (argc < 2) {
@@ -589,6 +605,12 @@ main(int argc, char *argv[])
 		default: usage(*argv); return EXIT_FAILURE;
 		case '?': usage(*argv); return EXIT_SUCCESS;
 		}
+
+	if (optind >= argc) {
+		usage(*argv);
+		return EXIT_FAILURE;
+	}
+	fname = argv[optind];
 
 	optind = 1;
 	prim_hd = gen_open(fname, flags);

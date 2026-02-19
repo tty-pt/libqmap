@@ -127,10 +127,10 @@ qmap_ccmp(const void * const a,
 
 static int
 qmap_scmp(const void * const a,
-          const void * const b,
-          size_t len UNUSED)
+		  const void * const b,
+		  size_t len UNUSED)
 {
-    return strcmp((const char *)a, (const char *)b);
+	return strcmp((const char *)a, (const char *)b);
 }
 
 static int
@@ -217,10 +217,9 @@ qmap_id(uint32_t hd, const void * const key)
 
 		size_t len;
 		if (type->measure) {
-			size_t current_key_len = type->measure(key);
 			size_t okey_len = type->measure(okey);
-			len = (current_key_len > okey_len)
-				? current_key_len
+			len = (key_len > okey_len)
+				? key_len
 				: okey_len;
 		} else
 			len = type->len;
@@ -370,6 +369,7 @@ _qmap_open(uint32_t ktype, uint32_t vtype,
 
 	// STORE {{{
 	qmap->table = malloc(sizeof(void *) * len);
+	CBUG(!qmap->table, "malloc error (table)\n");
 	memset(qmap->table, 0, sizeof(void *) * len);
 	// }}}
 
@@ -408,7 +408,7 @@ qmap_open(const char *filename,
 
 	if (!filename)
 		goto file_skip;
-	else {
+	else if (database) {
 		char buf[strlen(filename)
 			+ strlen(database) + 2];
 
@@ -430,6 +430,7 @@ qmap_open(const char *filename,
 		qmap_file_t file;
 		memset(&file, 0, sizeof(file));
 		file.ids = ids_init();
+		file.fd = -1;
 		ids_push(&file.ids, hd);
 		qmap_put(qmap_files_hd, filename, &file);
 	} else
@@ -455,11 +456,15 @@ s_measure(const void *key)
 }
 
 static void file_close(qmap_file_t *file) {
-	CBUG(munmap(file->mmaped, file->size) == -1,
-			"munmap failed");
+	if (file->mmaped) {
+		CBUG(munmap(file->mmaped, file->size) == -1,
+				"munmap failed");
+		file->mmaped = 0;
+	}
 
-	close(file->fd);
-	file->mmaped = 0;
+	if (file->fd >= 0)
+		close(file->fd);
+	file->fd = -1;
 }
 
 __attribute__((destructor))
@@ -907,6 +912,10 @@ qmap_assoc(uint32_t hd, uint32_t link, qmap_assoc_t cb)
 uint32_t /* API */
 qmap_reg(size_t len)
 {
+	if (types_n > TYPES_MASK) {
+		fprintf(stderr, "qmap_reg: type limit reached\n");
+		return QM_MISS;
+	}
 	uint32_t id = types_n ++;
 	qmap_type_t *type = &qmap_types[id];
 
@@ -927,6 +936,10 @@ qmap_cmp_set(uint32_t ref, qmap_cmp_t *cmp)
 uint32_t /* API */
 qmap_mreg(qmap_measure_t *measure)
 {
+	if (types_n > TYPES_MASK) {
+		fprintf(stderr, "qmap_mreg: type limit reached\n");
+		return QM_MISS;
+	}
 	uint32_t id = types_n ++;
 	qmap_type_t *type = &qmap_types[id];
 
@@ -1006,9 +1019,20 @@ qmap_load_file(char *filename, uint32_t dbid)
 	CBUG(fstat(file->fd, &sb) == -1, "fstat");
 
 	file->size = sb.st_size;
+	if (file->size == 0) {
+		close(file->fd);
+		file->fd = -1;
+		return;
+	}
 
 	file->mmaped = (char*) mmap(NULL, file->size,
 			PROT_READ, MAP_SHARED, file->fd, 0);
+	if (file->mmaped == MAP_FAILED) {
+		file->mmaped = 0;
+		close(file->fd);
+		file->fd = -1;
+		return;
+	}
 
 skip_open:
 	cur = (idsi_t *) ids_iter(&file->ids);
@@ -1104,6 +1128,12 @@ qmap_save_file(char *filename)
 
 	CBUG(ftruncate(file->fd, (off_t) file->size) == -1,
 			"ftruncate failed");
+
+	if (file->size == 0) {
+		close(file->fd);
+		file->fd = -1;
+		return;
+	}
 
 	file->mmaped = (char*) mmap(NULL, file->size,
 			PROT_WRITE, MAP_SHARED, file->fd, 0);
