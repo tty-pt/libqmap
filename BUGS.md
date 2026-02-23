@@ -19,15 +19,15 @@ When a qmap is created with both `QM_MIRROR` (file-backed persistence) and `QM_M
 
 ### Reproduction
 ```c
-qmap_t *qm = qmap_open("test.qmap", QM_I32 | QM_I32 | QM_MIRROR | QM_MULTIVALUE, 0);
-qmap_put(qm, 100, 1);
-qmap_put(qm, 100, 2);
-qmap_put(qm, 100, 3);
-printf("Before close: %zu\n", qmap_count(qm, 100)); // Prints: 3
-qmap_close(qm);
+uint32_t hd = qmap_open("test.qmap", QM_I32 | QM_I32 | QM_MIRROR | QM_MULTIVALUE, 0);
+qmap_put(hd, 100, 1);
+qmap_put(hd, 100, 2);
+qmap_put(hd, 100, 3);
+printf("Before close: %zu\n", qmap_count(hd, 100)); // Prints: 3
+qmap_close(hd);
 
-qm = qmap_open("test.qmap", QM_I32 | QM_I32 | QM_MIRROR | QM_MULTIVALUE, 0);
-printf("After reopen: %zu\n", qmap_count(qm, 100)); // Prints: 0
+hd = qmap_open("test.qmap", QM_I32 | QM_I32 | QM_MIRROR | QM_MULTIVALUE, 0);
+printf("After reopen: %zu\n", qmap_count(hd, 100)); // Prints: 0
 ```
 
 ### Expected Behavior
@@ -58,10 +58,10 @@ Using `qmap_assoc()` to create a secondary index on a QM_MULTIVALUE map causes a
 ### Reproduction
 ```c
 // Primary map: employee_id -> employee_data
-qmap_t *employees = qmap_open(NULL, QM_I32 | QM_BIN | QM_MULTIVALUE, 1024);
+uint32_t employees = qmap_open(NULL, QM_I32 | QM_BIN | QM_MULTIVALUE, 1024);
 
 // Secondary index: department_id -> employee_id
-qmap_t *by_dept = qmap_open(NULL, QM_I32 | QM_I32 | QM_MULTIVALUE, 512);
+uint32_t by_dept = qmap_open(NULL, QM_I32 | QM_I32 | QM_MULTIVALUE, 512);
 qmap_assoc(employees, by_dept, extract_dept);
 
 // Add employees to different departments
@@ -101,19 +101,19 @@ When using `QM_RANGE` iteration on a QM_MULTIVALUE map, the iterator does not re
 
 ### Reproduction
 ```c
-qmap_t *qm = qmap_open(NULL, QM_I32 | QM_I32 | QM_RANGE | QM_MULTIVALUE, 0);
+uint32_t hd = qmap_open(NULL, QM_I32 | QM_I32 | QM_RANGE | QM_MULTIVALUE, 0);
 
 // Add duplicates for key 2000
-qmap_put(qm, 2000, 1);
-qmap_put(qm, 2000, 2);
-qmap_put(qm, 2000, 3);
+qmap_put(hd, 2000, 1);
+qmap_put(hd, 2000, 2);
+qmap_put(hd, 2000, 3);
 
 // Add entries for adjacent keys
-qmap_put(qm, 1999, 100);
-qmap_put(qm, 2001, 200);
+qmap_put(hd, 1999, 100);
+qmap_put(hd, 2001, 200);
 
 // Iterate from 2000 to 2000 (should return 3 entries)
-qmap_iter_t it = qmap_range(qm, 2000, 2000);
+qmap_iter_t it = qmap_range(hd, 2000, 2000);
 size_t count = 0;
 while (QM_LIVE(it)) {
     count++;
