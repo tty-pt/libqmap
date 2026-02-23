@@ -575,6 +575,14 @@ qmap_init(void)
  * MIRROR functionality in itself, just putting in whatever
  * kind of map.
  */
+/* Helper: Update IDM last position if needed */
+static inline void
+update_idm_last(qmap_t *qmap, uint32_t pn)
+{
+	if (pn >= qmap->idm.last)
+		qmap->idm.last = pn + 1;
+}
+
 static inline uint32_t
 _qmap_put(uint32_t hd, const void * key,
 		const void *value, uint32_t pn)
@@ -597,8 +605,7 @@ _qmap_put(uint32_t hd, const void * key,
 			if (pn != QM_MISS) {
 				n = pn;
 				/* Update IDM to know about this position */
-				if (pn >= qmap->idm.last)
-					qmap->idm.last = pn + 1;
+				update_idm_last(qmap, pn);
 			} else {
 				n = idm_new(&qmap->idm);
 			}
@@ -612,8 +619,7 @@ _qmap_put(uint32_t hd, const void * key,
 			if (pn != QM_MISS && pn != old_n) {
 				n = pn;
 				/* Update IDM to know about this position */
-				if (pn >= qmap->idm.last)
-					qmap->idm.last = pn + 1;
+				update_idm_last(qmap, pn);
 			} else if (pn == QM_MISS) {
 				n = idm_new(&qmap->idm);
 			} else {
