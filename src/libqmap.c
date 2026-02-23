@@ -795,17 +795,29 @@ static void qmap_ndel_topdown(uint32_t hd, uint32_t n){
 	uint32_t new_map_entry = QM_MISS;
 	if (head->flags & QM_MULTIVALUE) {
 		int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
-		int last = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_LAST);
 		
-		if (first != -1 && last != -1 && last > first) {
-			/* Multiple entries with this key exist.
-			 * Find another duplicate to point hash table to. */
-			for (int i = first; i <= last; i++) {
-				uint32_t pos = qmap->sorted_idx[i];
-				if (pos != n && qmap->omap[pos]) {
-					new_map_entry = pos;
-					break;
+		if (first != -1) {
+			uint32_t first_pos = qmap->sorted_idx[first];
+			if (first_pos == n) {
+				/* Deleting the first entry, check if a second exists */
+				int second = first + 1;
+				if (second < (int)head->sorted_n) {
+					const void *second_key = qmap_key(hd, qmap->sorted_idx[second]);
+					qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
+					size_t key_len = qmap_len(head->types[QM_KEY], key);
+					size_t len;
+					if (type->measure) {
+						size_t second_len = type->measure(second_key);
+						len = (key_len > second_len) ? key_len : second_len;
+					} else
+						len = type->len;
+					
+					if (type->cmp(key, second_key, len) == 0)
+						new_map_entry = qmap->sorted_idx[second];
 				}
+			} else {
+				/* Not deleting first entry, first remains valid */
+				new_map_entry = first_pos;
 			}
 		}
 	}
