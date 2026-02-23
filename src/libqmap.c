@@ -44,6 +44,7 @@ enum QM_MBR {
 
 enum qm_internal_flags {
 	QM_SDIRTY = 1, // sorted list needs rebuild
+	QM_IS_MIRROR = 2,  // this is a QM_MIRROR map (shares positions with primary)
 };
 
 typedef struct {
@@ -491,7 +492,8 @@ file_skip:
 		return hd;
 
 	flags &= ~QM_AINDEX;
-	_qmap_open(vtype, ktype, mask, flags | QM_PGET);
+	uint32_t mirror_hd = _qmap_open(vtype, ktype, mask, flags | QM_PGET);
+	qmap_heads[mirror_hd].iflags |= QM_IS_MIRROR;  /* Mark as mirror for position sharing */
 	qmap_assoc(hd + 1, hd, NULL);
 	return hd;
 }
@@ -720,11 +722,19 @@ qmap_put(uint32_t hd, const void * const key,
 	while (ids_next(&ahd, &cur)) {
 		qmap_t *aqmap;
 		const void *skey;
+		qmap_head_t *ahead;
 
 		aqmap = &qmaps[ahd];
+		ahead = &qmap_heads[ahd];
 		aqmap->assoc(&skey, rkey, rval);
 
-		_qmap_put(ahd, skey, rval, n);
+		/* Only share positions with QM_MIRROR maps.
+		 * General secondary indexes (qmap_assoc) get independent positions. */
+		if (ahead->iflags & QM_IS_MIRROR) {
+			_qmap_put(ahd, skey, rval, n);  /* Mirror: share position */
+		} else {
+			_qmap_put(ahd, skey, rval, QM_MISS);  /* Secondary index: independent */
+		}
 	}
 
 	return id;

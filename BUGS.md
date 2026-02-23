@@ -2,13 +2,12 @@
 
 This document tracks bugs discovered during comprehensive testing of the QM_MULTIVALUE feature (commit b1bc322, v0.7.0).
 
-## Status: Fixed in v0.8.0 (except Bug #2 - partial fix)
+## Status: All bugs fixed in v0.8.0
 
-The following bugs have been addressed:
-- **Bug #1**: FIXED in v0.8.0 - QM_MIRROR + QM_MULTIVALUE persistence now works correctly
-- **Bug #3**: FIXED in v0.8.0 - QM_RANGE iteration now returns all duplicates
-
-Bug #2 remains as a known limitation.
+All QM_MULTIVALUE bugs have been addressed:
+- **Bug #1**: FIXED - QM_MIRROR + QM_MULTIVALUE persistence works correctly
+- **Bug #2**: FIXED - qmap_assoc + QM_MULTIVALUE no longer segfaults
+- **Bug #3**: FIXED - QM_RANGE iteration returns all duplicates
 
 ---
 
@@ -54,17 +53,23 @@ The QM_MIRROR serialization logic may not be aware of the IDM (Index Duplicate M
 
 ---
 
-## Bug #2: qmap_assoc + QM_MULTIVALUE Multi-Key Segfault (KNOWN LIMITATION)
+## Bug #2: qmap_assoc + QM_MULTIVALUE Multi-Key Segfault (FIXED)
 
-**Severity:** CRITICAL  
+**Severity:** CRITICAL (now FIXED)  
 **Component:** Secondary indexes (qmap_assoc)  
-**Status:** NOT FIXED - Known limitation
+**Fixed in:** v0.8.0
 
 ### Description
-Using `qmap_assoc()` to create a secondary index on a QM_MULTIVALUE map causes issues when the secondary index contains entries with multiple distinct key values.
+Using `qmap_assoc()` to create a secondary index on a QM_MULTIVALUE map caused a segmentation fault when the secondary index contains entries with multiple distinct key values.
+
+### Fix Applied
+Added internal flag `QM_IS_MIRROR` to distinguish QM_MIRROR maps (which share positions with primary) from general secondary indexes created via qmap_assoc(). Modified qmap_put() to only share positions for actual QM_MIRROR maps, not for general qmap_assoc() secondary indexes.
+
+### Important Note
+The correct API usage is: `qmap_assoc(secondary_map, primary_map, callback)` - the SECOND parameter is the primary map.
 
 ### Status
-⚠️ **KNOWN LIMITATION** - This bug was not fixed in v0.8.0 due to complexity. The fix requires architectural changes to how secondary indexes handle position sharing.
+✅ **FIXED in v0.8.0** - Secondary indexes no longer crash with QM_MULTIVALUE
 
 ### Reproduction
 ```c
