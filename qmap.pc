@@ -5,6 +5,6 @@ includedir=${prefix}/include
 
 Name: qmaplib
 Description: Simple hashtable library
-Version: 0.0.1
+Version: 0.6.0
 Libs: -L${libdir} -lxxhash
 Cflags: -I${includedir}/qmaplib

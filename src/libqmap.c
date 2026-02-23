@@ -58,6 +58,8 @@ typedef struct {
 	uint32_t *map;  	// id -> n
 	const void **omap;	// n -> key
 	void **table;		// n -> values
+	size_t *key_sizes;	// n -> size of allocated key
+	size_t *val_sizes;	// n -> size of allocated value
 
 	ids_t linked;
 	qmap_assoc_t *assoc;
@@ -379,6 +381,10 @@ _qmap_open(uint32_t ktype, uint32_t vtype,
 	} else
 		qmap->sorted_idx = NULL;
 
+	qmap->key_sizes = calloc(len, sizeof(*qmap->key_sizes));
+	qmap->val_sizes = calloc(len, sizeof(*qmap->val_sizes));
+	CBUG(!(qmap->key_sizes && qmap->val_sizes), "malloc error (size arrays)\n");
+
 	head->iflags |= QM_SDIRTY;
 	head->sorted_n = 0;
 
@@ -416,10 +422,11 @@ qmap_open(const char *filename,
 				filename, database);
 
 		const uint32_t *ehd = qmap_get(qmap_dbs_hd, buf);
+		uint32_t old_hd = ehd ? *ehd : QM_MISS;
 		qmap_put(qmap_dbs_hd, buf, &hd);
 
-		if (ehd && mdbs[*ehd])
-			mdbs[*ehd] = 0;
+		if (old_hd != QM_MISS && mdbs[old_hd])
+			mdbs[old_hd] = 0;
 		mdbs[hd] = 1;
 	}
 
@@ -437,15 +444,15 @@ qmap_open(const char *filename,
 		ids_push((ids_t *) &file_p->ids, hd);
 
 file_skip:
+	if (filename)
+		qmap_load_file((char*) filename, head->dbid);
+
 	if (!(flags & QM_MIRROR))
 		return hd;
 
 	flags &= ~QM_AINDEX;
 	_qmap_open(vtype, ktype, mask, flags | QM_PGET);
 	qmap_assoc(hd + 1, hd, NULL);
-
-	if (filename)
-		qmap_load_file((char*) filename, head->dbid);
 	return hd;
 }
 
@@ -569,24 +576,48 @@ _qmap_put(uint32_t hd, const void * key,
 		if (head->types[QM_VALUE] == QM_PTR)
 			value = &value;
 
-		if (qmap->map[id] == n) {
-			const void *ekey = qmap_key(hd, n);
-			const void *eval = qmap_val(hd, n);
+		klen = qmap_len(head->types[QM_VALUE], aval);
 
-			free((void *) ekey);
-			free((void *) eval);
+		if (qmap->map[id] == n) {
+			const void *old_key = qmap_key(hd, n);
+			const void *old_val = qmap_val(hd, n);
+			size_t key_len = qmap_len(head->types[QM_KEY], key);
+			
+			/* Reuse key allocation if key is identical */
+			if (qmap->key_sizes[n] == key_len && 
+			    memcmp(old_key, key, key_len) == 0) {
+				rkey = (void *) old_key;  /* reuse */
+			} else {
+				free((void *) old_key);
+				rkey = malloc(key_len);
+				memcpy(rkey, key, key_len);
+				qmap->key_sizes[n] = key_len;
+			}
+			
+			/* Reuse value allocation if new value fits */
+			if (qmap->val_sizes[n] >= klen) {
+				rval = (void *) old_val;  /* reuse */
+				memcpy(rval, value, klen);
+			} else {
+				free((void *) old_val);
+				rval = malloc(klen);
+				memcpy(rval, value, klen);
+				qmap->val_sizes[n] = klen;
+			}
+		} else {
+			/* New entry - allocate fresh */
+			size_t key_len = qmap_len(head->types[QM_KEY], key);
+			
+			rkey = malloc(key_len);
+			memcpy(rkey, key, key_len);
+			qmap->key_sizes[n] = key_len;
+			
+			rval = malloc(klen);
+			memcpy(rval, value, klen);
+			qmap->val_sizes[n] = klen;
 		}
 
-		klen = qmap_len(head->types[QM_VALUE], aval);
-		rval = malloc(klen);
 		* VAL_ADDR(qmap, n) = rval;
-		memcpy(rval, value, klen);
-
-		// this could be avoided
-		// if the key is the same
-		klen = qmap_len(head->types[QM_KEY], key);
-		rkey = malloc(klen);
-		memcpy(rkey, key, klen);
 	}
 
 	qmap->map[id] = n;
@@ -663,6 +694,10 @@ static void qmap_ndel_topdown(uint32_t hd, uint32_t n){
 	uint32_t id, ahd;
 	idsi_t *cur;
 
+	// Guard against already-closed maps (omap is NULL after close)
+	if (!qmap->omap)
+		return;
+
 	if (n >= head->m)
 		return;
 
@@ -686,6 +721,8 @@ static void qmap_ndel_topdown(uint32_t hd, uint32_t n){
 		value = qmap_val(hd, n);
 		free((void *) key);
 		free((void *) value);
+		qmap->key_sizes[n] = 0;
+		qmap->val_sizes[n] = 0;
 	}
 
 	head->iflags |= QM_SDIRTY;
@@ -876,6 +913,8 @@ qmap_close(uint32_t hd)
 	qmap->idm.last = 0;
 	free(qmap->map);
 	free(qmap->omap);
+	free(qmap->key_sizes);
+	free(qmap->val_sizes);
 	if (qmap->sorted_idx)
 		free(qmap->sorted_idx);
 	if (qmap_heads[hd].phd == hd)

@@ -43,10 +43,9 @@
  *
  * ### Type specifiers
  * - **u** — uint32_t integer
- * - **s** — string
- * - **a** — key only: uint32_t with auto-index (default is **not** `a`)
- * - **2&lt;type&gt;** — key only: accepted for future duplicate-key support
- * - Defaults are **s** for key and value if omitted.
+ * - **s** — string (default for both key and value)
+ * - **a** — key only: uint32_t with auto-index
+ * - **2&lt;type&gt;** — key only: reserved for future duplicate-key support (not yet implemented)
  *
  * ### Examples
  * @code
@@ -69,9 +68,7 @@
  *
  * ### Notes
  * - `-r` is counter-intuitive: when enabled, lookups are done **by primary keys**.
- * - Databases are only saved at exit if not opened read-only (i.e., you used `-p`/`-d`).
  * - `-q`/`-a` options are processed in order; each entry extends the lookup chain.
- * - `2<type>` is accepted but duplicate-key behavior is not implemented yet.
  *
  * @see qmap_handle
  * @see qmap_common
@@ -165,9 +162,9 @@ usage(char *prog)
 	fprintf(stderr, "        -k               also print keys (for get and rand).\n");
 	fprintf(stderr, "    'k' and 'v' are key and value types. Supported values:\n");
 	fprintf(stderr, "         u               uint32_t\n");
-	fprintf(stderr, "         s               string (default value type)\n");
-	fprintf(stderr, "         a               key only! uint32_t automatic index (default)\n");
-	fprintf(stderr, "         2<base-type>    key only! accepted for future duplicate support\n");
+	fprintf(stderr, "         s               string (default for both key and value)\n");
+	fprintf(stderr, "         a               key only! uint32_t automatic index\n");
+	fprintf(stderr, "         2<base-type>    key only! reserved for future duplicate support (not yet implemented)\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Use '.' as the KEY for all keys!\n");
 	fprintf(stderr, "-q/-a options are processed in order.\n");
