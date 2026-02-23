@@ -1361,15 +1361,10 @@ qmap_save(void)
 uint32_t /* API */
 qmap_get_multi(uint32_t hd, const void *key)
 {
-	uint32_t cur = qmap_iter(hd, key, 0);
-	uint32_t sn;
-	
-	if (!qmap_lnext(&sn, cur)) {
-		qmap_fin(cur);
+	/* Return QM_MISS if key doesn't exist */
+	if (qmap_count(hd, key) == 0)
 		return QM_MISS;
-	}
 	
-	qmap_fin(cur);
 	return qmap_iter(hd, key, 0);
 }
 
