@@ -21,9 +21,13 @@
 - Missing validation error message when QM_MULTIVALUE used without QM_SORTED
 
 ### Improved
-- Consolidated 3 binary search functions into single qmap_bsearch_ex() (63 lines saved, 26% reduction)
+- Consolidated 3 binary search functions into single qmap_bsearch_ex() with mode parameter
 - Enhanced API documentation with multi-value semantics and cross-references
 - Added deletion pattern examples to README (3 approaches for different use cases)
+- **Performance optimizations** (post-release refactoring):
+  - qmap_iter: 3x faster (eliminated double binary search)
+  - qmap_count: 115x faster for 1000 duplicates (O(n) → O(log n) algorithm)
+  - Code clarity improvements with helper functions
 
 ## [0.6.0] - 2026-02-23
 - Remove QM_MIRROR requirement for file loading (files now load automatically regardless of mirroring)
