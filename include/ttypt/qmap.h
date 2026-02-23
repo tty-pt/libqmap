@@ -43,12 +43,11 @@ enum qmap_flags {
   /** Create reverse-lookup (secondary) map. The mirror map
    *  handle is always primary_hd + 1 and swaps keys/values.
    *  
-   *  File-backed maps will load data from disk regardless of this flag.
    *  QM_MIRROR is useful when you need bidirectional lookup (key→value
    *  and value→key) and is commonly used with file persistence.
    *  
-   *  When using QM_MIRROR, remember to close both maps:
-   *  qmap_close(hd) and qmap_close(hd + 1). */
+   *  The mirror map is automatically closed when you close the primary
+   *  map via qmap_close(hd). */
   QM_MIRROR = 2,
 
   /** For associated maps: default to obtaining primary keys
@@ -151,8 +150,8 @@ enum qmap_if {
  *       data from disk when opened, regardless of flags. The
  *       QM_MIRROR flag enables bidirectional lookup (creating a
  *       reverse map at handle hd + 1) which is useful for many
- *       persistence scenarios. When using QM_MIRROR, both the
- *       primary (hd) and mirror (hd + 1) maps must be closed.
+ *       persistence scenarios. The mirror map is automatically
+ *       closed when closing the primary map.
  *
  * @note Multiple databases can share a single file. Each database
  *       is identified by a hash of its name (XXH32). Data is saved
@@ -205,10 +204,10 @@ void qmap_close(uint32_t hd);
  *           - The entry is REPLACED with a LARGER value (qmap_put)
  *           - The key is CHANGED (qmap_put with different key at same hash)
  *
- *           IMPROVED BEHAVIOR: Since version with allocation reuse, pointers
- *           typically remain valid when updating with the same key and a
- *           same-or-smaller value. However, for maximum safety, it's still
- *           recommended to copy data before modifications.
+ *           IMPROVED BEHAVIOR: Since v0.6.0, pointers typically remain valid
+ *           when updating with the same key and a same-or-smaller value.
+ *           However, for maximum safety, it's still recommended to copy
+ *           data before modifications.
  *
  *           Do NOT:
  *           - Free returned pointers

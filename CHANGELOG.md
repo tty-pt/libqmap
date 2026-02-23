@@ -1,3 +1,10 @@
+## [0.6.0] - 2026-02-23
+- Remove QM_MIRROR requirement for file loading (files now load automatically regardless of mirroring)
+- Add allocation reuse optimization to reduce unnecessary malloc/free and improve pointer stability
+- Consolidate documentation (removed redundant IMPROVEMENTS.md, enhanced qmap.h API docs)
+- Fix documentation: clarify that mirror maps are automatically closed with primary map (no manual close needed)
+- Fix use-after-free bug in qmap_open() when reopening file-backed maps with database names
+
 ## [0.5.0] - 2025-10-24
 - Add test workflow and man page generation using Doxygen
 - Implement persistent storage (`qmap_save()` for tracked databases, multi-database file support)

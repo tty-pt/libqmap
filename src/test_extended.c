@@ -338,8 +338,7 @@ static void test_file_persistence(void) {
 		qmap_put(hd, &(uint32_t){2}, "persisted_two");
 		qmap_put(hd, &(uint32_t){3}, "persisted_three");
 		qmap_save(); // Explicit save
-		qmap_close(hd);
-		qmap_close(hd + 1); // Close mirror map
+		qmap_close(hd);  // Automatically closes mirror at hd + 1
 	}
 	PASS();
 	
@@ -352,8 +351,7 @@ static void test_file_persistence(void) {
 		ASSERT(v1 && strcmp(v1, "persisted_one") == 0, "Value 1 persisted");
 		ASSERT(v2 && strcmp(v2, "persisted_two") == 0, "Value 2 persisted");
 		ASSERT(v3 && strcmp(v3, "persisted_three") == 0, "Value 3 persisted");
-		qmap_close(hd);
-		qmap_close(hd + 1);
+		qmap_close(hd);  // Automatically closes mirror at hd + 1
 	}
 	
 	printf("Test multiple databases in same file:");

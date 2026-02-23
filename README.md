@@ -30,8 +30,8 @@ File-backed maps are **automatically saved at process exit**.
 
 **Note on File Persistence:**
 - File loading happens automatically when opening a file-backed map (no flags required)
-- The `QM_MIRROR` flag enables automatic reverse-lookup (bidirectional maps) and is useful for many persistence scenarios
-- When using `QM_MIRROR`, remember to close both the primary map and its mirror (handle + 1)
+- The `QM_MIRROR` flag enables automatic reverse-lookup (bidirectional maps)
+- When using `QM_MIRROR`, closing the primary map automatically closes the mirror (handle + 1)
 
 Persistent example:
 ```c
@@ -45,8 +45,7 @@ qmap_close(hd);
 uint32_t hd = qmap_open("data.qmap", "main", QM_U32, QM_STR, 0xFF, QM_MIRROR);
 qmap_put(hd, &key, value);
 qmap_save();  // Optional explicit save
-qmap_close(hd);
-qmap_close(hd + 1);  // Close the mirror map
+qmap_close(hd);  // Mirror map (hd + 1) is automatically closed
 ```
 
 ## Docs
