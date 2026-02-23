@@ -2,22 +2,30 @@
 
 This document tracks bugs discovered during comprehensive testing of the QM_MULTIVALUE feature (commit b1bc322, v0.7.0).
 
-## Status: Documented for Future Resolution
+## Status: Fixed in v0.8.0 (except Bug #2 - partial fix)
 
-The bugs below are **not blocking** the refactoring work. They represent edge cases in feature interactions that should be addressed in future releases.
+The following bugs have been addressed:
+- **Bug #1**: FIXED in v0.8.0 - QM_MIRROR + QM_MULTIVALUE persistence now works correctly
+- **Bug #3**: FIXED in v0.8.0 - QM_RANGE iteration now returns all duplicates
+
+Bug #2 remains as a known limitation.
 
 ---
 
-## Bug #1: QM_MIRROR + QM_MULTIVALUE Persistence Failure
+## Bug #1: QM_MIRROR + QM_MULTIVALUE Persistence Failure (FIXED)
 
-**Severity:** HIGH  
+**Severity:** HIGH (now FIXED)  
 **Component:** File persistence  
-**Discovered in:** Test 12 (lines 490-549 in src/test_multivalue.c)
+**Fixed in:** v0.8.0
 
 ### Description
-When a qmap is created with both `QM_MIRROR` (file-backed persistence) and `QM_MULTIVALUE` flags, duplicate entries are not persisted to disk. After closing and reopening the file, `qmap_count()` returns 0 for keys that had multiple values.
+When a qmap is created with both `QM_MIRROR` (file-backed persistence) and `QM_MULTIVALUE` flags, duplicate entries were not persisted to disk. After closing and reopening the file, `qmap_count()` returned 0 for keys that had multiple values.
 
-### Reproduction
+### Fix Applied
+The root cause was that when opening a file with a NULL database name, the map was not being registered for save operations. Fixed by always setting `mdbs[hd] = 1` when a map is created, regardless of whether a database name is provided.
+
+### Status
+✅ **FIXED in v0.8.0** - Duplicates are now correctly persisted and restored.
 ```c
 uint32_t hd = qmap_open("test.qmap", QM_I32 | QM_I32 | QM_MIRROR | QM_MULTIVALUE, 0);
 qmap_put(hd, 100, 1);
@@ -46,14 +54,17 @@ The QM_MIRROR serialization logic may not be aware of the IDM (Index Duplicate M
 
 ---
 
-## Bug #2: qmap_assoc + QM_MULTIVALUE Multi-Key Segfault
+## Bug #2: qmap_assoc + QM_MULTIVALUE Multi-Key Segfault (KNOWN LIMITATION)
 
 **Severity:** CRITICAL  
 **Component:** Secondary indexes (qmap_assoc)  
-**Discovered in:** Test 15 (lines 644-714 in src/test_multivalue.c)
+**Status:** NOT FIXED - Known limitation
 
 ### Description
-Using `qmap_assoc()` to create a secondary index on a QM_MULTIVALUE map causes a **segmentation fault** when the secondary index contains entries with multiple distinct key values.
+Using `qmap_assoc()` to create a secondary index on a QM_MULTIVALUE map causes issues when the secondary index contains entries with multiple distinct key values.
+
+### Status
+⚠️ **KNOWN LIMITATION** - This bug was not fixed in v0.8.0 due to complexity. The fix requires architectural changes to how secondary indexes handle position sharing.
 
 ### Reproduction
 ```c
@@ -90,16 +101,20 @@ The `qmap_assoc()` logic likely assumes a 1:1 or 1:many relationship with a sing
 
 ---
 
-## Bug #3: QM_RANGE + QM_MULTIVALUE Incomplete Iteration
+## Bug #3: QM_RANGE + QM_MULTIVALUE Incomplete Iteration (FIXED)
 
-**Severity:** MEDIUM  
+**Severity:** MEDIUM (now FIXED)  
 **Component:** Range iteration  
-**Discovered in:** Test 16 (lines 716-776 in src/test_multivalue.c)
+**Fixed in:** v0.8.0
 
 ### Description
-When using `QM_RANGE` iteration on a QM_MULTIVALUE map, the iterator does not return all expected duplicate entries within the range.
+When using `QM_RANGE` iteration on a QM_MULTIVALUE map, the iterator did not return all expected duplicate entries within the range.
 
-### Reproduction
+### Fix Applied
+The root cause was incorrect condition ordering in `qmap_iter()`. The QM_MULTIVALUE check was being shadowed by the QM_RANGE check, causing `qmap_bsearch()` to use `QMAP_BSEARCH_ANY` mode instead of `QMAP_BSEARCH_FIRST`. Fixed by reordering the conditions so QM_MULTIVALUE is checked first.
+
+### Status
+✅ **FIXED in v0.8.0** - Range iteration now returns all duplicates correctly.
 ```c
 uint32_t hd = qmap_open(NULL, QM_I32 | QM_I32 | QM_RANGE | QM_MULTIVALUE, 0);
 

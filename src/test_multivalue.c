@@ -859,6 +859,58 @@ static void test_multivalue_stress(void)
 	qmap_close(hd);
 }
 
+/* Test 18: Regression test for Bug #3 - QM_RANGE+QM_MULTIVALUE iteration
+ * Previously, qmap_range with a specific key on QM_MULTIVALUE maps could
+ * skip some duplicates because it used QMAP_BSEARCH_ANY instead of FIRST.
+ * This test verifies ALL duplicates are returned.
+ */
+static void test_bug3_range_returns_all_duplicates(void)
+{
+	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF,
+	                        QM_SORTED | QM_MULTIVALUE);
+	assert(hd != QM_MISS);
+	
+	/* Add 5 duplicates for key 2000 */
+	uint32_t key = 2000;
+	for (uint32_t i = 1; i <= 5; i++) {
+		qmap_put(hd, &key, &i);
+	}
+	
+	/* Verify count */
+	assert(qmap_count(hd, &key) == 5);
+	
+	/* Use qmap_range to iterate from 2000 to 2000 - should get ALL 5 duplicates */
+	uint32_t cur = qmap_iter(hd, &key, QM_RANGE);
+	assert(cur != QM_MISS);
+	
+	const void *k, *v;
+	int count = 0;
+	while (qmap_next(&k, &v, cur)) {
+		count++;
+	}
+	
+	/* Bug #3 fix: should return ALL 5 duplicates, not just some */
+	assert(count == 5);
+	
+	/* Test with adjacent keys to ensure boundary detection works */
+	uint32_t key_low = 1999;
+	uint32_t key_high = 2001;
+	qmap_put(hd, &key_low, &(uint32_t){100});
+	qmap_put(hd, &key_high, &(uint32_t){200});
+	
+	/* Range iteration for key 2000 should still only return 5 entries */
+	cur = qmap_iter(hd, &key, QM_RANGE);
+	count = 0;
+	while (qmap_next(&k, &v, cur)) {
+		const uint32_t *ck = k;
+		assert(*ck == 2000);  /* Should not include adjacent keys */
+		count++;
+	}
+	assert(count == 5);
+	
+	qmap_close(hd);
+}
+
 int main(void)
 {
 	printf("=== QM_MULTIVALUE Test Suite ===\n\n");
@@ -880,6 +932,7 @@ int main(void)
 	TEST(test_multivalue_multiple_indexes);
 	TEST(test_multivalue_range_iteration);
 	TEST(test_multivalue_stress);
+	TEST(test_bug3_range_returns_all_duplicates);
 	
 	printf("\n=== All tests passed! ===\n");
 	return 0;

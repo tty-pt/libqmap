@@ -452,7 +452,8 @@ qmap_open(const char *filename,
 
 	if (!filename)
 		goto file_skip;
-	else if (database) {
+	
+	if (database) {
 		char buf[strlen(filename)
 			+ strlen(database) + 2];
 
@@ -465,8 +466,9 @@ qmap_open(const char *filename,
 
 		if (old_hd != QM_MISS && mdbs[old_hd])
 			mdbs[old_hd] = 0;
-		mdbs[hd] = 1;
 	}
+	
+	mdbs[hd] = 1;  /* Mark as dirty for save, regardless of database name */
 
 	const qmap_file_t *file_p
 		= qmap_get(qmap_files_hd, filename);
@@ -908,16 +910,16 @@ qmap_iter(uint32_t hd, const void * const key, uint32_t flags)
 	uint32_t cur_id = idm_new(&cursor_idm);
 	qmap_cur_t *cursor = &qmap_cursors[cur_id];
 
-	if (key && (flags & QM_RANGE) && (head->flags & QM_SORTED)) {
-		int exact;
-		cursor->pos = qmap_bsearch(hd, key, &exact);
-	} else if (key && (head->flags & QM_MULTIVALUE)) {
+	if (key && (head->flags & QM_MULTIVALUE)) {
 		/* For QM_MULTIVALUE maps, use sorted iteration to find all duplicates.
 		 * Find first occurrence of this key */
 		int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
 		cursor->pos = (first != -1) ? (uint32_t)first : head->sorted_n;
 		/* Use sorted iteration but stop at key boundary */
 		flags |= QM_RANGE;
+	} else if (key && (flags & QM_RANGE) && (head->flags & QM_SORTED)) {
+		int exact;
+		cursor->pos = qmap_bsearch(hd, key, &exact);
 	} else if (key && !(flags & QM_RANGE)) {
 		uint32_t id = qmap_id(hd, key);
 		cursor->pos = qmap->map[id];
