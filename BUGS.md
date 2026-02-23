@@ -2,7 +2,7 @@
 
 This document tracks bugs discovered during comprehensive testing of the QM_MULTIVALUE feature (commit b1bc322, v0.7.0).
 
-## Status: All bugs fixed in v0.8.0
+## Status: All bugs fixed in v0.7.0
 
 All QM_MULTIVALUE bugs have been addressed:
 - **Bug #1**: FIXED - QM_MIRROR + QM_MULTIVALUE persistence works correctly
@@ -15,7 +15,7 @@ All QM_MULTIVALUE bugs have been addressed:
 
 **Severity:** HIGH (now FIXED)  
 **Component:** File persistence  
-**Fixed in:** v0.8.0
+**Fixed in:** v0.7.0
 
 ### Description
 When a qmap is created with both `QM_MIRROR` (file-backed persistence) and `QM_MULTIVALUE` flags, duplicate entries were not persisted to disk. After closing and reopening the file, `qmap_count()` returned 0 for keys that had multiple values.
@@ -24,7 +24,7 @@ When a qmap is created with both `QM_MIRROR` (file-backed persistence) and `QM_M
 The root cause was that when opening a file with a NULL database name, the map was not being registered for save operations. Fixed by always setting `mdbs[hd] = 1` when a map is created, regardless of whether a database name is provided.
 
 ### Status
-✅ **FIXED in v0.8.0** - Duplicates are now correctly persisted and restored.
+✅ **FIXED in v0.7.0** - Duplicates are now correctly persisted and restored.
 ```c
 uint32_t hd = qmap_open("test.qmap", QM_I32 | QM_I32 | QM_MIRROR | QM_MULTIVALUE, 0);
 qmap_put(hd, 100, 1);
@@ -57,7 +57,7 @@ The QM_MIRROR serialization logic may not be aware of the IDM (Index Duplicate M
 
 **Severity:** CRITICAL (now FIXED)  
 **Component:** Secondary indexes (qmap_assoc)  
-**Fixed in:** v0.8.0
+**Fixed in:** v0.7.0
 
 ### Description
 Using `qmap_assoc()` to create a secondary index on a QM_MULTIVALUE map caused a segmentation fault when the secondary index contains entries with multiple distinct key values.
@@ -69,7 +69,7 @@ Added internal flag `QM_IS_MIRROR` to distinguish QM_MIRROR maps (which share po
 The correct API usage is: `qmap_assoc(secondary_map, primary_map, callback)` - the SECOND parameter is the primary map.
 
 ### Status
-✅ **FIXED in v0.8.0** - Secondary indexes no longer crash with QM_MULTIVALUE
+✅ **FIXED in v0.7.0** - Secondary indexes no longer crash with QM_MULTIVALUE
 
 ### Reproduction
 ```c
@@ -110,7 +110,7 @@ The `qmap_assoc()` logic likely assumes a 1:1 or 1:many relationship with a sing
 
 **Severity:** MEDIUM (now FIXED)  
 **Component:** Range iteration  
-**Fixed in:** v0.8.0
+**Fixed in:** v0.7.0
 
 ### Description
 When using `QM_RANGE` iteration on a QM_MULTIVALUE map, the iterator did not return all expected duplicate entries within the range.
@@ -119,7 +119,7 @@ When using `QM_RANGE` iteration on a QM_MULTIVALUE map, the iterator did not ret
 The root cause was incorrect condition ordering in `qmap_iter()`. The QM_MULTIVALUE check was being shadowed by the QM_RANGE check, causing `qmap_bsearch()` to use `QMAP_BSEARCH_ANY` mode instead of `QMAP_BSEARCH_FIRST`. Fixed by reordering the conditions so QM_MULTIVALUE is checked first.
 
 ### Status
-✅ **FIXED in v0.8.0** - Range iteration now returns all duplicates correctly.
+✅ **FIXED in v0.7.0** - Range iteration now returns all duplicates correctly.
 ```c
 uint32_t hd = qmap_open(NULL, QM_I32 | QM_I32 | QM_RANGE | QM_MULTIVALUE, 0);
 

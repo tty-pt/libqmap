@@ -1,33 +1,20 @@
 ## [0.7.0] - 2026-02-23
 
-### Added
-- **QM_MULTIVALUE flag**: Enable duplicate keys in sorted maps for multi-value lookups
-  - Allows secondary indexes via qmap_assoc() where multiple entries share the same key
-  - Requires QM_SORTED flag (validated at qmap_open with error message)
-- **New API functions**:
-  - `qmap_get_multi(hd, key)` - Returns cursor to iterate over all values for a key
-  - `qmap_count(hd, key)` - Count entries for a specific key
-  - `qmap_del_all(hd, key)` - Delete all occurrences of a key at once
-- Comprehensive test suite for QM_MULTIVALUE functionality (9 tests, 383 lines)
-
-### Changed
-- `qmap_put()` with QM_MULTIVALUE: Always adds new entry instead of replacing
-- `qmap_del()` with QM_MULTIVALUE: Deletes only first occurrence instead of all
-- **Note**: Changes only apply when using new QM_MULTIVALUE flag - fully backwards compatible
-
 ### Fixed
-- **Critical**: Data loss bug when using qmap_assoc() with sorted secondary indexes having duplicate keys
-- IDM tracking bug in _qmap_put() when inserting at specific positions (affected qmap_assoc)
-- Missing validation error message when QM_MULTIVALUE used without QM_SORTED
+- **Bug #1**: QM_MIRROR + QM_MULTIVALUE persistence now works correctly
+- **Bug #2**: qmap_assoc + QM_MULTIVALUE no longer segfaults with multiple keys
+- **Bug #3**: QM_RANGE iteration now returns all duplicates
 
 ### Improved
-- Consolidated 3 binary search functions into single qmap_bsearch_ex() with mode parameter
-- Enhanced API documentation with multi-value semantics and cross-references
-- Added deletion pattern examples to README (3 approaches for different use cases)
-- **Performance optimizations** (post-release refactoring):
-  - qmap_iter: 3x faster (eliminated double binary search)
-  - qmap_count: 115x faster for 1000 duplicates (O(n) → O(log n) algorithm)
-  - Code clarity improvements with helper functions
+- qmap_iter: 3x faster (eliminated double binary search)
+- qmap_count: 115x faster for 1000 duplicates (O(n) → O(log n))
+- Code clarity with helper functions
+
+### Added
+- Comprehensive test suite for QM_MULTIVALUE (18 tests)
+- QM_MULTIVALUE flag for duplicate keys in sorted maps
+
+---
 
 ## [0.6.0] - 2026-02-23
 - Remove QM_MIRROR requirement for file loading (files now load automatically regardless of mirroring)

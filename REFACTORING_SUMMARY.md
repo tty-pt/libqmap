@@ -106,13 +106,13 @@ Successfully refactored the QM_MULTIVALUE implementation with significant perfor
 
 ---
 
-## Known Limitations (Documented in BUGS.md)
+## Bugs Fixed in v0.7.0
 
-1. **Bug #1 (HIGH):** QM_MIRROR + QM_MULTIVALUE - Persistence failure  
-2. **Bug #2 (CRITICAL):** qmap_assoc + QM_MULTIVALUE - Multi-key segfault  
-3. **Bug #3 (MEDIUM):** QM_RANGE + QM_MULTIVALUE - Incomplete iteration  
+All 3 documented bugs have been fixed:
 
-**Status:** Documented with workarounds, not blocking this refactoring
+1. **Bug #1 (FIXED):** QM_MIRROR + QM_MULTIVALUE - Persistence now works
+2. **Bug #2 (FIXED):** qmap_assoc + QM_MULTIVALUE - No longer segfaults
+3. **Bug #3 (FIXED):** QM_RANGE + QM_MULTIVALUE - Returns all duplicates
 
 ---
 
@@ -131,10 +131,10 @@ Successfully refactored the QM_MULTIVALUE implementation with significant perfor
 - **Total refactoring time:** ~6 commits, systematic testing between each
 
 ### 🎯 Production Readiness
-- ✓ **Ready for production use**
-- ✓ Maintains API compatibility
-- ✓ No breaking changes
-- ⚠️ Avoid QM_MIRROR and qmap_assoc with QM_MULTIVALUE (see BUGS.md)
+- ✅ **Ready for production use**
+- ✅ Maintains API compatibility
+- ✅ No breaking changes
+- ✅ All QM_MULTIVALUE bugs fixed
 
 ---
 
