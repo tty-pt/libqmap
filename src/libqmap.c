@@ -288,24 +288,37 @@ qmap_rebuild_sorted(uint32_t hd)
 	head->iflags &= ~QM_SDIRTY;
 }
 
+/* Binary search modes */
+enum {
+	QMAP_BSEARCH_ANY = 0,    /* Find any match (original behavior) */
+	QMAP_BSEARCH_FIRST = 1,  /* Find first occurrence */
+	QMAP_BSEARCH_LAST = 2    /* Find last occurrence */
+};
+
+/* Unified binary search with mode parameter.
+ * For QMAP_BSEARCH_ANY: returns insertion point if not found, sets *exact
+ * For QMAP_BSEARCH_FIRST/LAST: returns position or -1 if not found */
 static int
-qmap_bsearch(uint32_t hd, const void *key, int *exact)
+qmap_bsearch_ex(uint32_t hd, const void *key, int *exact, int mode)
 {
 	qmap_head_t *head = &qmap_heads[hd];
 	qmap_t *qmap = &qmaps[hd];
+	int result = -1;
 
 	if (head->iflags & QM_SDIRTY)
 		qmap_rebuild_sorted(hd);
+
+	if (head->sorted_n == 0) {
+		if (exact) *exact = 0;
+		return (mode == QMAP_BSEARCH_ANY) ? 0 : -1;
+	}
 
 	qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
 	size_t key_len = qmap_len(head->types[QM_KEY], key);
 	int low = 0, high = (int) head->sorted_n - 1;
 	int mid = 0;
 
-	*exact = 0;
-
-	if (head->sorted_n == 0)
-		return 0;
+	if (exact) *exact = 0;
 
 	while (low <= high) {
 		mid = low + (high - low) / 2;
@@ -321,15 +334,28 @@ qmap_bsearch(uint32_t hd, const void *key, int *exact)
 		int cmp = type->cmp(mid_key, key, len);
 
 		if (cmp == 0) {
-			*exact = 1;
-			return mid;
+			if (exact) *exact = 1;
+			result = mid;
+			if (mode == QMAP_BSEARCH_ANY)
+				return mid;  /* Return immediately for ANY mode */
+			else if (mode == QMAP_BSEARCH_FIRST)
+				high = mid - 1;  /* Continue searching left */
+			else /* QMAP_BSEARCH_LAST */
+				low = mid + 1;   /* Continue searching right */
 		} else if (cmp < 0)
 			low = mid + 1;
 		else
 			high = mid - 1;
 	}
 
-	return low;
+	return (mode == QMAP_BSEARCH_ANY && (exact == NULL || !*exact)) ? low : result;
+}
+
+/* Wrapper for backward compatibility with original qmap_bsearch */
+static inline int
+qmap_bsearch(uint32_t hd, const void *key, int *exact)
+{
+	return qmap_bsearch_ex(hd, key, exact, QMAP_BSEARCH_ANY);
 }
 
 /* OPEN / INITIALIZATION {{{ */
@@ -346,6 +372,13 @@ _qmap_open(uint32_t ktype, uint32_t vtype,
 	size_t ids_len;
 
 	mask = mask ? mask : QM_DEFAULT_MASK;
+
+	/* QM_MULTIVALUE requires QM_SORTED */
+	if ((flags & QM_MULTIVALUE) && !(flags & QM_SORTED)) {
+		fprintf(stderr, "qmap: QM_MULTIVALUE requires QM_SORTED flag\n");
+		idm_del(&idm, hd);
+		return QM_MISS;
+	}
 
 	DEBUG(1, "%u %u 0x%x %u\n",
 			hd, ktype,
@@ -404,6 +437,11 @@ qmap_open(const char *filename,
 		uint32_t mask, uint32_t flags)
 {
 	uint32_t hd = _qmap_open(ktype, vtype, mask, flags);
+	
+	/* Check if open failed */
+	if (hd == QM_MISS)
+		return QM_MISS;
+	
 	qmap_head_t *head = &qmap_heads[hd];
 
 	head->file = filename;
@@ -556,10 +594,34 @@ _qmap_put(uint32_t hd, const void * key,
 		old_n = qmap->map[id];
 
 		if (old_n == QM_MISS) {
-			n = idm_new(&qmap->idm);
-			if (pn != QM_MISS)
+			if (pn != QM_MISS) {
 				n = pn;
+				/* Update IDM to know about this position */
+				if (pn >= qmap->idm.last)
+					qmap->idm.last = pn + 1;
+			} else {
+				n = idm_new(&qmap->idm);
+			}
 			head->n ++;
+		} else if (head->flags & QM_MULTIVALUE) {
+			/* QM_MULTIVALUE: Allow duplicate keys.
+			 * If pn is provided (from qmap_assoc), use it.
+			 * Otherwise, allocate a new position.
+			 * Don't update hash table - it keeps pointing to first occurrence.
+			 * Duplicate is accessible via sorted_idx iteration. */
+			if (pn != QM_MISS && pn != old_n) {
+				n = pn;
+				/* Update IDM to know about this position */
+				if (pn >= qmap->idm.last)
+					qmap->idm.last = pn + 1;
+			} else if (pn == QM_MISS) {
+				n = idm_new(&qmap->idm);
+			} else {
+				n = old_n;  /* pn == old_n, update in place */
+			}
+			
+			if (n != old_n)
+				head->n ++;
 		} else
 			n = old_n;
 	} else {
@@ -570,6 +632,7 @@ _qmap_put(uint32_t hd, const void * key,
 
 	CBUG(n >= head->m, "Capacity reached\n");
 	DEBUG(2, "%u %u %u %p\n", hd, n, id, key);
+	
 	rkey = key ? (void *) key : &qmap->map[id];
 
 	if (head->phd == hd) {
@@ -620,8 +683,12 @@ _qmap_put(uint32_t hd, const void * key,
 		* VAL_ADDR(qmap, n) = rval;
 	}
 
-	qmap->map[id] = n;
 	qmap->omap[n] = rkey;
+	
+	/* For QM_MULTIVALUE duplicates, don't update hash table */
+	if (!(head->flags & QM_MULTIVALUE) || qmap->map[id] == QM_MISS || qmap->map[id] == n)
+		qmap->map[id] = n;
+	
 	head->iflags |= QM_SDIRTY;
 
 	return id;
@@ -717,6 +784,26 @@ static void qmap_ndel_topdown(uint32_t hd, uint32_t n){
 
 	id = qmap_id(hd, key);
 
+	/* For QM_MULTIVALUE maps, check if other duplicates exist before clearing hash entry.
+	 * Do this BEFORE freeing the key! */
+	uint32_t new_map_entry = QM_MISS;
+	if (head->flags & QM_MULTIVALUE) {
+		int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
+		int last = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_LAST);
+		
+		if (first != -1 && last != -1 && last > first) {
+			/* Multiple entries with this key exist.
+			 * Find another duplicate to point hash table to. */
+			for (int i = first; i <= last; i++) {
+				uint32_t pos = qmap->sorted_idx[i];
+				if (pos != n && qmap->omap[pos]) {
+					new_map_entry = pos;
+					break;
+				}
+			}
+		}
+	}
+
 	if (head->phd == hd) {
 		value = qmap_val(hd, n);
 		free((void *) key);
@@ -726,7 +813,13 @@ static void qmap_ndel_topdown(uint32_t hd, uint32_t n){
 	}
 
 	head->iflags |= QM_SDIRTY;
-	qmap->map[id] = QM_MISS;
+	
+	/* Update hash table entry */
+	if (new_map_entry != QM_MISS)
+		qmap->map[id] = new_map_entry;
+	else
+		qmap->map[id] = QM_MISS;
+
 	qmap->omap[n] = NULL;
 	idm_del(&qmap->idm, n);
 	head->n --;
@@ -742,10 +835,35 @@ qmap_ndel(uint32_t hd, uint32_t n) {
 void /* API */
 qmap_del(uint32_t hd, const void * const key)
 {
+	qmap_head_t *head = &qmap_heads[hd];
 	uint32_t cur = qmap_iter(hd, key, 0), sn;
 
-	while (qmap_lnext(&sn, cur))
-		qmap_ndel(hd, sn);
+	if (head->flags & QM_MULTIVALUE) {
+		/* For QM_MULTIVALUE maps, only delete the first occurrence */
+		if (qmap_lnext(&sn, cur))
+			qmap_ndel(hd, sn);
+		qmap_fin(cur);
+	} else {
+		/* For regular maps, delete all matching entries */
+		while (qmap_lnext(&sn, cur))
+			qmap_ndel(hd, sn);
+	}
+}
+
+void
+qmap_del_all(uint32_t hd, const void * const key)
+{
+	qmap_head_t *head = &qmap_heads[hd];
+	
+	if (head->flags & QM_MULTIVALUE) {
+		/* For QM_MULTIVALUE maps, delete all occurrences */
+		while (qmap_get(hd, key) != NULL) {
+			qmap_del(hd, key);
+		}
+	} else {
+		/* For regular maps, just call qmap_del once */
+		qmap_del(hd, key);
+	}
 }
 
 /* }}} */
@@ -774,6 +892,21 @@ qmap_iter(uint32_t hd, const void * const key, uint32_t flags)
 	if (key && (flags & QM_RANGE) && (head->flags & QM_SORTED)) {
 		int exact;
 		cursor->pos = qmap_bsearch(hd, key, &exact);
+	} else if (key && (head->flags & QM_MULTIVALUE)) {
+		/* For QM_MULTIVALUE maps, use sorted iteration to find all duplicates.
+		 * We set a special flag to indicate we want exact key matches only. */
+		int exact;
+		cursor->pos = qmap_bsearch(hd, key, &exact);
+		if (!exact)
+			cursor->pos = head->sorted_n;  // No match, end iteration immediately
+		else {
+			/* Find first occurrence of this key */
+			int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
+			if (first != -1)
+				cursor->pos = first;
+		}
+		/* Use sorted iteration but stop at key boundary */
+		flags |= QM_RANGE;
 	} else if (key && !(flags & QM_RANGE)) {
 		uint32_t id = qmap_id(hd, key);
 		cursor->pos = qmap->map[id];
@@ -808,7 +941,28 @@ qmap_lnext(uint32_t *sn, uint32_t cur_id)
 		if (cursor->pos >= head->sorted_n)
 			goto end;
 
-		*sn = qmap->sorted_idx[cursor->pos];
+		n = qmap->sorted_idx[cursor->pos];
+		
+		/* For QM_MULTIVALUE with specific key, stop when key changes */
+		if (cursor->key && (head->flags & QM_MULTIVALUE)) {
+			const void *cur_key = qmap_key(cursor->hd, n);
+			qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
+			size_t len;
+			
+			if (type->measure) {
+				size_t cur_key_len = type->measure(cur_key);
+				size_t start_key_len = type->measure(cursor->key);
+				len = (cur_key_len > start_key_len)
+					? cur_key_len
+					: start_key_len;
+			} else
+				len = type->len;
+			
+			if (type->cmp(cur_key, cursor->key, len) != 0)
+				goto end;
+		}
+		
+		*sn = n;
 		cursor->pos++;
 		return 1;
 	}
@@ -1203,3 +1357,44 @@ qmap_save(void)
 	while (qmap_next(&key, &value, c))
 		qmap_save_file((char *) key);
 }
+
+/* MULTI-VALUE API {{{ */
+
+uint32_t /* API */
+qmap_get_multi(uint32_t hd, const void *key)
+{
+	uint32_t cur = qmap_iter(hd, key, 0);
+	uint32_t sn;
+	
+	if (!qmap_lnext(&sn, cur)) {
+		qmap_fin(cur);
+		return QM_MISS;
+	}
+	
+	qmap_fin(cur);
+	return qmap_iter(hd, key, 0);
+}
+
+uint32_t /* API */
+qmap_count(uint32_t hd, const void *key)
+{
+	qmap_head_t *head = &qmap_heads[hd];
+	
+	if (key == NULL) {
+		/* Count total entries in map */
+		return head->n;
+	}
+	
+	/* Count entries for specific key */
+	uint32_t count = 0;
+	uint32_t cur = qmap_iter(hd, key, 0);
+	const void *k, *v;
+	
+	while (qmap_next(&k, &v, cur))
+		count++;
+	
+	qmap_fin(cur);
+	return count;
+}
+
+/* }}} */

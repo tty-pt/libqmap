@@ -68,6 +68,25 @@ enum qmap_flags {
    *  This makes the first iteration after modifications O(n log n)
    *  instead of O(n). */
   QM_SORTED = 8,
+
+  /** Allow duplicate keys in sorted maps. Enables multi-value
+   *  lookups where multiple entries can share the same key.
+   *  
+   *  REQUIRES QM_SORTED: This flag cannot be used without QM_SORTED.
+   *  qmap_open() will return QM_MISS if QM_MULTIVALUE is set without
+   *  QM_SORTED.
+   *  
+   *  Behavior:
+   *  - qmap_put() with an existing key ADDS a new entry (does not replace)
+   *  - qmap_get() returns the FIRST matching value
+   *  - qmap_get_multi() returns cursor to iterate over ALL matching values
+   *  - qmap_count() returns the number of entries for a key
+   *  - qmap_del() deletes only the FIRST matching entry
+   *  - qmap_del_all() deletes ALL entries with the specified key
+   *  
+   *  Use Case: Secondary indexes via qmap_assoc() where multiple primary
+   *  entries map to the same secondary key. */
+  QM_MULTIVALUE = 16,
 };
 
 /**
@@ -248,9 +267,14 @@ void qmap_close(uint32_t hd);
 /**
  * @brief Retrieve a value by key.
  *
+ * For maps with QM_MULTIVALUE flag, this returns the FIRST
+ * matching value only. To retrieve all values for a key, use
+ * qmap_get_multi() instead.
+ *
  * @param[in] hd  Map handle.
  * @param[in] key Key to look up.
  * @return        Pointer to value or NULL if not found.
+ *                For QM_MULTIVALUE maps, returns first match.
  *                See qmap_common for pointer ownership rules.
  */
 const void *qmap_get(uint32_t hd,
@@ -258,6 +282,10 @@ const void *qmap_get(uint32_t hd,
 
 /**
  * @brief Insert or update a pair.
+ *
+ * Behavior depends on the QM_MULTIVALUE flag:
+ * - Without QM_MULTIVALUE: Replaces existing value if key exists
+ * - With QM_MULTIVALUE: Always adds a new entry (duplicates allowed)
  *
  * @param[in] hd    Map handle.
  * @param[in] key   Key (NULL if QM_AINDEX).
@@ -272,11 +300,29 @@ uint32_t qmap_put(uint32_t hd,
 /**
  * @brief Delete an entry by key.
  *
+ * For maps with QM_MULTIVALUE flag, this only deletes the FIRST
+ * occurrence of the key. To delete all duplicates, call this
+ * function multiple times until the key no longer exists.
+ *
  * @param[in] hd  Map handle.
  * @param[in] key Key to delete.
  */
 void qmap_del(uint32_t hd,
               const void * const key);
+
+/**
+ * @brief Delete all entries with the specified key.
+ *
+ * For QM_MULTIVALUE maps, removes all duplicate entries. For regular maps,
+ * behaves identically to qmap_del().
+ *
+ * @param[in] hd  Map handle.
+ * @param[in] key Key of entries to delete.
+ *
+ * @see qmap_del
+ * @see qmap_get_multi
+ */
+void qmap_del_all(uint32_t hd, const void * const key);
 
 /**
  * @brief Remove all entries from a map.
@@ -419,6 +465,50 @@ int qmap_next(const void **key,
  * @param[in] cur_id Cursor handle.
  */
 void qmap_fin(uint32_t cur_id);
+
+/**
+ * @brief Start iteration over all values for a key.
+ *
+ * For maps with QM_MULTIVALUE flag, this returns a cursor that
+ * iterates over ALL values associated with the given key in
+ * sorted order. For maps without QM_MULTIVALUE, this behaves
+ * like a single-value iterator.
+ *
+ * @param[in] hd  Map handle.
+ * @param[in] key Key to look up.
+ * @return        Cursor handle for use with qmap_next(), or
+ *                QM_MISS if key not found.
+ *
+ * Example:
+ * @code
+ * uint32_t cur = qmap_get_multi(hd, &key);
+ * if (cur != QM_MISS) {
+ *   const void *k, *v;
+ *   while (qmap_next(&k, &v, cur)) {
+ *     // Process each value for this key
+ *   }
+ *   qmap_fin(cur);
+ * }
+ * @endcode
+ *
+ * @note Internally, this is equivalent to: qmap_iter(hd, key, 0)
+ * @note For single-value lookups, qmap_get() is more efficient
+ * @see qmap_del_all for deleting all duplicates at once
+ * @see qmap_count for counting entries without iteration
+ */
+uint32_t qmap_get_multi(uint32_t hd, const void *key);
+
+/**
+ * @brief Count entries matching a key.
+ *
+ * @param[in] hd  Map handle.
+ * @param[in] key Key to count. NULL counts total entries in map.
+ * @return        Number of matching entries.
+ *
+ * @note For QM_MULTIVALUE maps, returns count of all duplicate values
+ * @note For normal maps, returns 0 or 1
+ */
+uint32_t qmap_count(uint32_t hd, const void *key);
 
 /** @} */
 
