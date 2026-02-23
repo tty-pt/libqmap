@@ -874,10 +874,11 @@ qmap_del_all(uint32_t hd, const void * const key)
 	qmap_head_t *head = &qmap_heads[hd];
 	
 	if (head->flags & QM_MULTIVALUE) {
-		/* For QM_MULTIVALUE maps, delete all occurrences */
-		while (qmap_get(hd, key) != NULL) {
+		/* For QM_MULTIVALUE maps, delete all occurrences
+		 * Use qmap_count (O(log n)) instead of repeated qmap_get */
+		size_t count = qmap_count(hd, key);
+		for (size_t i = 0; i < count; i++)
 			qmap_del(hd, key);
-		}
 	} else {
 		/* For regular maps, just call qmap_del once */
 		qmap_del(hd, key);
