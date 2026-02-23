@@ -1377,16 +1377,18 @@ qmap_count(uint32_t hd, const void *key)
 		return head->n;
 	}
 	
-	/* Count entries for specific key */
-	uint32_t count = 0;
-	uint32_t cur = qmap_iter(hd, key, 0);
-	const void *k, *v;
+	/* For non-multivalue maps, return 0 or 1 */
+	if (!(head->flags & QM_MULTIVALUE)) {
+		return qmap_get(hd, key) != NULL ? 1 : 0;
+	}
 	
-	while (qmap_next(&k, &v, cur))
-		count++;
+	/* For multivalue maps, use binary search to find first and last occurrences */
+	int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
+	if (first == -1)
+		return 0;
 	
-	qmap_fin(cur);
-	return count;
+	int last = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_LAST);
+	return (uint32_t)(last - first + 1);
 }
 
 /* }}} */
