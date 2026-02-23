@@ -894,17 +894,9 @@ qmap_iter(uint32_t hd, const void * const key, uint32_t flags)
 		cursor->pos = qmap_bsearch(hd, key, &exact);
 	} else if (key && (head->flags & QM_MULTIVALUE)) {
 		/* For QM_MULTIVALUE maps, use sorted iteration to find all duplicates.
-		 * We set a special flag to indicate we want exact key matches only. */
-		int exact;
-		cursor->pos = qmap_bsearch(hd, key, &exact);
-		if (!exact)
-			cursor->pos = head->sorted_n;  // No match, end iteration immediately
-		else {
-			/* Find first occurrence of this key */
-			int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
-			if (first != -1)
-				cursor->pos = first;
-		}
+		 * Find first occurrence of this key */
+		int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
+		cursor->pos = (first != -1) ? (uint32_t)first : head->sorted_n;
 		/* Use sorted iteration but stop at key boundary */
 		flags |= QM_RANGE;
 	} else if (key && !(flags & QM_RANGE)) {
