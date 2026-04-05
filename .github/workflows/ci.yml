@@ -10,6 +10,7 @@ jobs:
     uses: tty-pt/ci/.github/workflows/all-in-one.yml@main
     with:
       name: libqmap
+      publish_to: "deb,apk,pacman,rpm,brew,openbsd,pacman_mingw,winget"
       deps: "libqsys,libxxhash-dev"
       deps_apk: "libqsys,xxhash-dev"
       deps_pacman: "libqsys,xxhash"
@@ -17,6 +18,7 @@ jobs:
       deps_brew: "libqsys,xxhash"
       deps_openbsd: "libqsys,xxhash"
       deps_pacman_mingw: "mingw-w64-libqsys,mingw-w64-xxhash,mingw-w64-mman-win32-git"
+      deps_winget: "mingw-w64-libqsys,mingw-w64-xxhash,mingw-w64-mman-win32-git"
     secrets:
       HOST: ${{ secrets.OPENBSD_HOST }}
       USER: ${{ secrets.OPENBSD_USER }}
