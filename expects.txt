@@ -102,10 +102,11 @@ gen_get_test(epsilon, e) = e ✅
 gen_get_test(bravo, b2) = b2 ✅
 gen_iter_check(hd=2, start_key=NULL, flags=0x1)
   > iter 0: key=alpha ✅
-  > iter 1: key=bravo ✅
-  > iter 2: key=delta ✅
-  > iter 3: key=epsilon ✅
-  > RESULT: all 4 items correct ✅
+  > iter 1: key=beta ✅
+  > iter 2: key=bravo ✅
+  > iter 3: key=delta ✅
+  > iter 4: key=epsilon ✅
+  > RESULT: all 5 items correct ✅
 thirteenth
 Testing QM_SORTED + QM_RANGE (UTOS map)
 gen_get_test(50, fifty) = fifty ✅

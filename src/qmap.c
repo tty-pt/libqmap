@@ -13,9 +13,45 @@
  *
  * ## Usage
  * ```
- * qmap [-qa ARG] [[-rl] [-Rpdg ARG] ...] file[[:k]:v]
+ * qmap [-qa ARG] [[-rl] [-RpdgmcD ARG] ...] file[[:k]:v]
  * ```
  * Run `qmap -?` to show full help.
+ *
+ * ### Options
+ * - **-r**
+ *   Reverse direction (swap key/value lookup).
+ * - **-l**
+ *   List all key/value pairs.
+ * - **-L**
+ *   List "missing" values (**requires `-q`** to specify the paired database).
+ * - **-q** *file[:k[:v]]*
+ *   Query database for lookups and printing.
+ * - **-a** *file[:k[:v]]*
+ *   Associate database for reverse lookups and printing.
+ * - **-R** *KEY*
+ *   Random value for *KEY* (`.` = any).
+ * - **-p** *KEY[:VAL]*
+ *   Insert or update a key/value pair.
+ * - **-d** *KEY[:VAL]*
+ *   Delete key/value pair (first match for multivalue maps).
+ * - **-D** *KEY[:VAL]*
+ *   Delete ALL entries with key (multivalue support).
+ * - **-g** *KEY*
+ *   Get value(s) for a key (first match for multivalue maps; `.` = all).
+ * - **-m** *KEY*
+ *   Get ALL values for a key (multivalue iteration).
+ * - **-c** *KEY*
+ *   Count entries for a key.
+ * - **-x**
+ *   When printing associations, stop after the first result.
+ * - **-k**
+ *   Also print keys (for `-g`, `-m`, and `-R`).
+ *
+ * ### Type specifiers
+ * - **u** — uint32_t integer
+ * - **s** — string (default for both key and value)
+ * - **a** — key only: uint32_t with auto-index
+ * - **2&lt;type&gt;** — key only: multivalue support (enables QM_MULTIVALUE|QM_SORTED)
  *
  * ### Options
  * - **-r**
@@ -41,17 +77,45 @@
  * - **-k**
  *   Also print keys (for `-g` and `-R`).
  *
- * ### Type specifiers
- * - **u** — uint32_t integer
- * - **s** — string (default for both key and value)
- * - **a** — key only: uint32_t with auto-index
- * - **2&lt;type&gt;** — key only: reserved for future duplicate-key support (not yet implemented)
+ * ### Notes
+ * - `-r` is counter-intuitive: when enabled, lookups are done **by primary keys**.
+ * - `-q`/`-a` options are processed in order; each entry extends the lookup chain.
+ * - Multivalue maps (type `2<type>`) automatically enable QM_MULTIVALUE|QM_SORTED flags.
  *
  * ### Examples
  * @code
  * # Automatic IDs: key 'a', values as strings
- * qmap -p Mathew owners.db:a:s              # → Mathew’s ID
- * qmap -p cat    pets.db:a:s                # → cat’s ID
+ * qmap -p Mathew owners.db:a:s              # → Mathew's ID
+ * qmap -p cat    pets.db:a:s                # → cat's ID
+ *
+ * # Association (no duplicates)
+ * qmap -p 1:1 assoc.db:u:u                  # owner_id:pet_id
+ *
+ * # Get Mathew's pet (use -q/-a to resolve names/IDs)
+ * qmap -q owners.db:a:s -a pets.db:a:s -g Mathew assoc.db:u:u
+ *
+ * # Random value for a KEY
+ * qmap -q owners.db:a:s -a pets.db:a:s -R Mathew assoc.db:u:u
+ *
+ * # Chained lookups (multiple -q/-a in order)
+ * qmap -q owners.db:a:s -q pets.db:a:s -g Mathew assoc.db:u:u
+ *
+ * # Multivalue support - duplicate keys
+ * qmap -p 100:value1 multi.db:2u:s          # Create multivalue map
+ * qmap -p 100:value2 multi.db:2u:s          # Add duplicate key
+ * qmap -p 100:value3 multi.db:2u:s          # Add another
+ * qmap -r -g 100 multi.db:2u:s              # → value1 (first match)
+ * qmap -r -m 100 multi.db:2u:s              # → value1 value2 value3 (all)
+ * qmap -r -c 100 multi.db:2u:s              # → 3 (count)
+ * qmap -r -d 100 multi.db:2u:s              # Delete first only
+ * qmap -r -D 100 multi.db:2u:s              # Delete all with key 100
+ * @endcode
+ *
+ * ### Notes
+ * - `-r` is counter-intuitive: when enabled, lookups are done **by primary keys**.
+ * - `-q`/`-a` options are processed in order; each entry extends the lookup chain.
+ * - Multivalue maps (type `2<type>`) automatically enable QM_MULTIVALUE|QM_SORTED flags.
+ * - For multivalue maps with non-string keys, use `-r` to lookup by the key type.
  *
  * # Association (no duplicates)
  * qmap -p 1:1 assoc.db:u:u                  # owner_id:pet_id
@@ -93,7 +157,10 @@
 #define QM_MAX 1024
 #define QDBE_MASK (32768 - 1)
 #define QDBE_QMASK 0xF
-#define QH_RDONLY 0x32
+/* CLI-specific flags - use high bits to avoid overlap with QM library flags (0x1F) */
+#define QH_RDONLY 0x100
+/* Mask for QMap library flags (bits 0-4: values 1,2,4,8,16) */
+#define QM_FLAGS_MASK 0x1F
 
 typedef struct {
 	uint32_t types[2];
@@ -113,7 +180,7 @@ enum qmape_mbr {
 qmape_meta_t metas[QM_MAX];
 qmape_type_t types[8];
 
-uint32_t QH_NOT_NEW = 1;
+uint32_t QH_NOT_NEW = 0x200;  /* CLI flag - high bit to avoid QM library flag overlap */
 
 uint32_t prim_hd, aux_hd;
 
@@ -147,7 +214,7 @@ void qmape_print(uint32_t hd, enum qmape_mbr t,
 void
 usage(char *prog)
 {
-	fprintf(stderr, "Usage: %s [-qa ARG] [[-rl] [-Rpdg ARG] ...] file[[:k]:v]", prog);
+	fprintf(stderr, "Usage: %s [-qa ARG] [[-rl] [-RpdgmcD ARG] ...] file[[:k]:v]\n", prog);
 	fprintf(stderr, "    Options:\n");
 	fprintf(stderr, "        -r               reverse operation\n");
 	fprintf(stderr, "        -l               list all values\n");
@@ -156,15 +223,18 @@ usage(char *prog)
 	fprintf(stderr, "        -a file[:k[:v]]  db to use for reversed string lookups and printing\n");
 	fprintf(stderr, "        -R KEY           get random value of key (empty key for any)\n");
 	fprintf(stderr, "        -p KEY[:VAL]     put a key/value pair\n");
-	fprintf(stderr, "        -d KEY[:VAL]     delete key/value pair(s)\n");
-	fprintf(stderr, "        -g KEY           get value(s) of a key\n");
+	fprintf(stderr, "        -d KEY[:VAL]     delete key/value pair (first match for multivalue)\n");
+	fprintf(stderr, "        -D KEY[:VAL]     delete ALL entries with key (multivalue support)\n");
+	fprintf(stderr, "        -g KEY           get value(s) of a key (first match for multivalue)\n");
+	fprintf(stderr, "        -m KEY           get ALL values for a key (multivalue iteration)\n");
+	fprintf(stderr, "        -c KEY           count entries for a key\n");
 	fprintf(stderr, "        -x               when printing associations, bail on first result\n");
 	fprintf(stderr, "        -k               also print keys (for get and rand).\n");
 	fprintf(stderr, "    'k' and 'v' are key and value types. Supported values:\n");
 	fprintf(stderr, "         u               uint32_t\n");
 	fprintf(stderr, "         s               string (default for both key and value)\n");
 	fprintf(stderr, "         a               key only! uint32_t automatic index\n");
-	fprintf(stderr, "         2<base-type>    key only! reserved for future duplicate support (not yet implemented)\n");
+	fprintf(stderr, "         2<base-type>    key only! multivalue support (enables QM_MULTIVALUE|QM_SORTED)\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Use '.' as the KEY for all keys!\n");
 	fprintf(stderr, "-q/-a options are processed in order.\n");
@@ -440,6 +510,53 @@ static void gen_list(void) {
 	print_keys = aux;
 }
 
+static inline void gen_multi(void) {
+	const void *iter_key = gen_lookup(optarg);
+	uint32_t c;
+
+	if (!iter_key) {
+		printf("-1\n");
+		return;
+	}
+
+	c = qmap_get_multi(prim_hd + !reverse, iter_key);
+	
+	if (c == QM_MISS) {
+		printf("-1\n");
+		return;
+	}
+
+	while (qmap_next(&key_ptr, &value_ptr, c)) {
+		if (reverse)
+			key_ptr = value_ptr;
+		
+		if (print_keys) {
+			qmape_print(prim_hd, KEY, key_ptr);
+			putchar(' ');
+		}
+		qmape_print(prim_hd, VALUE, value_ptr);
+		putchar('\n');
+	}
+}
+
+static inline void gen_count(void) {
+	const void *iter_key = gen_lookup(optarg);
+	size_t count;
+
+	if (!iter_key) {
+		printf("-1\n");
+		return;
+	}
+
+	count = qmap_count(prim_hd + !reverse, iter_key);
+	printf("%zu\n", count);
+}
+
+static inline void gen_del_all(void) {
+	gen_lookup(optarg);
+	qmap_del_all(prim_hd + !reverse, value_ptr);
+}
+
 static inline void gen_put(void) {
 	uint32_t id;
 	const void *key;
@@ -515,22 +632,21 @@ uint32_t gen_open(char *fname, uint32_t flags) {
 			vtype = _qmape_type(second_col);
 		}
 
-		if (!strcmp(first_col, "a")) {
-			flags |= QM_AINDEX;
-			ktype = QM_HNDL;
-		/*
-		} else if (*first_col == '2') {
-			flags |= QH_DUP;
-			first_col++;
-			if (*first_col)
-				key_type = first_col;
-		*/
-		} else
+	if (!strcmp(first_col, "a")) {
+		flags |= QM_AINDEX;
+		ktype = QM_HNDL;
+	} else if (*first_col == '2') {
+		flags |= QM_MULTIVALUE | QM_SORTED;
+		first_col++;
+		if (*first_col)
 			ktype = _qmape_type(first_col);
+	} else
+		ktype = _qmape_type(first_col);
 	}
 
+	/* Mask out CLI-specific flags before passing to library */
 	hd = qmap_open(buf, "hd", ktype, vtype,
-			QDBE_MASK, flags | QM_MIRROR);
+			QDBE_MASK, (flags & QM_FLAGS_MASK) | QM_MIRROR);
 	metas[hd].types[0] = ktype;
 	metas[hd].types[1] = vtype;
 	metas[hd + 1].types[0] = vtype;
@@ -549,7 +665,7 @@ static void s_print(const void *data) {
 int
 main(int argc, char *argv[])
 {
-	static char *optstr = "kxla:q:p:d:g:rR:L:?";
+	static char *optstr = "kxla:q:p:d:D:g:m:c:rR:L:?";
 	char *fname = NULL, ch;
 	uint32_t flags = QH_RDONLY, aux;
 
@@ -590,15 +706,18 @@ main(int argc, char *argv[])
 		case 'k':
 			print_keys = 1;
 			break;
-		case 'p':
-		case 'd':
-			/* TODO m1 can be inferred */
-			flags &= ~QH_RDONLY;
-		case 'l':
-		case 'L':
-		case 'R':
-		case 'g':
-		case 'r': break;
+	case 'p':
+	case 'd':
+	case 'D':
+		/* TODO m1 can be inferred */
+		flags &= ~QH_RDONLY;
+	case 'l':
+	case 'L':
+	case 'R':
+	case 'g':
+	case 'm':
+	case 'c':
+	case 'r': break;
 		default: usage(*argv); return EXIT_FAILURE;
 		case '?': usage(*argv); return EXIT_SUCCESS;
 		}
@@ -619,7 +738,10 @@ main(int argc, char *argv[])
 	case 'l': gen_list(); break;
 	case 'p': gen_put(); break;
 	case 'd': gen_del(); break;
+	case 'D': gen_del_all(); break;
 	case 'g': gen_get(optarg); break;
+	case 'm': gen_multi(); break;
+	case 'c': gen_count(); break;
 	case 'r': reverse = !reverse; break;
 	}
 }

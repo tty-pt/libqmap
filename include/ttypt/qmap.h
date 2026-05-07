@@ -87,6 +87,11 @@ enum qmap_flags {
    *  Use Case: Secondary indexes via qmap_assoc() where multiple primary
    *  entries map to the same secondary key. */
   QM_MULTIVALUE = 16,
+
+  /** Disable auto-grow. When set and the map reaches capacity,
+   *  inserts return QM_MISS instead of growing the table.
+   *  Use for memory-constrained environments or fixed-size tables. */
+  QM_NOGROW = 32,
 };
 
 /**
@@ -127,10 +132,9 @@ enum qmap_if {
  *
  *  @note Qmap uses global state and is not thread-safe.
  *
- *  @note Capacity Limits: Map capacity is determined by the mask parameter
- *        and cannot be changed after creation. Capacity = mask + 1.
- *        Attempting to exceed capacity terminates the process via CBUG().
- *        There is no dynamic resizing.
+ *  @note Capacity Limits: Initial capacity is mask + 1. When capacity is
+ *        reached, the map automatically grows (doubles) unless QM_NOGROW
+ *        is set. Growth is transparent to callers.
  *
  *  @note Memory Allocation: Malloc failures trigger CBUG() which terminates
  *        the process immediately. There is no graceful error handling for

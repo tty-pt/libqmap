@@ -1,5 +1,6 @@
 #!/bin/sh -e
 
+export LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH
 qmap=./bin/qmap
 
 assert() {
@@ -17,6 +18,8 @@ assert() {
 rm *.db 2>/dev/null || true
 
 ./bin/test | diff expects.txt -
+./bin/test_extended
+./bin/test_multivalue
 
 adb=a.db:a:u
 bdb=b.db:a

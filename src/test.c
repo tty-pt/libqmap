@@ -73,7 +73,7 @@ typedef struct {
 	unsigned type, flags;
 } hd_meta_t;
 
-hd_meta_t hd_meta[8];
+hd_meta_t hd_meta[32];
 
 static inline int
 rmbr_get(unsigned hd, unsigned mbr)
@@ -408,15 +408,13 @@ void test_eighth(void)
 	qmap_close(hd);
 }
 
-#if 0
-
 static inline
 void test_nineth(void)
 {
-	unsigned cur_id, key;
-	unsigned hd = gen_open(UTOS, QM_DUP);
+	unsigned cur_id;
+	const void *key, *value;
+	unsigned hd = gen_open(UTOS, QM_MULTIVALUE | QM_SORTED);
 	unsigned keys[] = { 3, 3, 2 };
-	char value[MAX_LEN];
 
 	gen_put(hd, &keys[0], "hello");
 	qmap_put(hd, &keys[1], "hi");
@@ -424,27 +422,26 @@ void test_nineth(void)
 	gen_put(hd, &keys[2], "ola");
 
 	cur_id = qmap_iter(hd, NULL, 0);
-	while (qmap_next(&key, value, cur_id))
-		printf("ITER '%u' - '%s'\n", key, value);
+	while (qmap_next(&key, &value, cur_id))
+		printf("ITER '%u' - '%s'\n", *(unsigned *)key, (char *)value);
 
 	printf("Keyed iter\n");
 	cur_id = qmap_iter(hd, &keys[0], 0);
-	while (qmap_next(&key, value, cur_id))
-		printf("ITER '%u' - '%s'\n", key, value);
+	while (qmap_next(&key, &value, cur_id))
+		printf("ITER '%u' - '%s'\n", *(unsigned *)key, (char *)value);
 
 	gen_del(hd, &keys[0], NULL);
 	printf("After del keyed iter\n");
 	cur_id = qmap_iter(hd, &keys[0], 0);
-	while (qmap_next(&key, value, cur_id))
-		printf("ITER '%u' - '%s'\n", key, value);
+	while (qmap_next(&key, &value, cur_id))
+		printf("ITER '%u' - '%s'\n", *(unsigned *)key, (char *)value);
 	printf("After del unkeyed\n");
 	cur_id = qmap_iter(hd, NULL, 0);
-	while (qmap_next(&key, value, cur_id))
-		printf("ITER '%u' - '%s'\n", key, value);
+	while (qmap_next(&key, &value, cur_id))
+		printf("ITER '%u' - '%s'\n", *(unsigned *)key, (char *)value);
 
 	qmap_close(hd);
 }
-#endif
 
 static inline
 void test_tenth(void)
@@ -529,8 +526,8 @@ void test_twelfth(void)
 	gen_put(hd, "epsilon", "e"); // add
 	gen_put(hd, "bravo", "b2");  // add
 
-	const void *final_order[] = { "alpha", "bravo", "delta", "epsilon" };
-	gen_iter_check(hd, NULL, QM_RANGE, 4, final_order);
+	const void *final_order[] = { "alpha", "beta", "bravo", "delta", "epsilon" };
+	gen_iter_check(hd, NULL, QM_RANGE, 5, final_order);
 
 	qmap_close(hd);
 }

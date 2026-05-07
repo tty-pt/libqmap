@@ -4,6 +4,9 @@
  * This benchmarks the performance improvements from:
  * - P1.1: Fix double binary search in qmap_iter
  * - P1.2: Optimize qmap_count from O(n) to O(log n)
+ * - P1.3: Remove redundant key lookup in qmap_get_multi
+ * - P1.5: Optimize qmap_drop for standalone maps
+ * - P1.6: Cache hashes for dense string lookup
  * - P3.1: Optimize qmap_del_all
  */
 
@@ -23,13 +26,16 @@ void bench_iter_creation(void)
 	
 	/* Create map with 1000 duplicates */
 	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 2047, QM_MULTIVALUE | QM_SORTED);
-	for (int i = 0; i < 1000; i++)
-		qmap_put(hd, &(int){100}, &(int){i});
+	for (uint32_t i = 0; i < 1000; i++) {
+		uint32_t key = 100;
+		qmap_put(hd, &key, &i);
+	}
 	
 	/* Benchmark: Create 10,000 iterators */
 	TIME_START();
 	for (int i = 0; i < 10000; i++) {
-		uint32_t cur = qmap_iter(hd, &(int){100}, 0);
+		uint32_t key = 100;
+		uint32_t cur = qmap_iter(hd, &key, 0);
 		qmap_fin(cur);
 	}
 	TIME_END(elapsed);
@@ -38,6 +44,143 @@ void bench_iter_creation(void)
 	printf("  Average per iter: %.4f ms\n", elapsed / 10000.0);
 	
 	qmap_close(hd);
+}
+
+/* Benchmark: qmap_get_multi creation (P1.3 impact) */
+void bench_get_multi(void)
+{
+	BENCH("P1.3: qmap_get_multi creation");
+
+	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 2047, QM_MULTIVALUE | QM_SORTED);
+	for (int i = 0; i < 1000; i++) {
+		uint32_t key = 100;
+		uint32_t value = (uint32_t)i;
+		qmap_put(hd, &key, &value);
+	}
+
+	TIME_START();
+	for (int i = 0; i < 10000; i++) {
+		uint32_t key = 100;
+		uint32_t cur = qmap_get_multi(hd, &key);
+		qmap_fin(cur);
+	}
+	TIME_END(elapsed);
+
+	printf("  10,000 get_multi calls on 1000 duplicates: %.2f ms\n", elapsed);
+	printf("  Average per call: %.4f ms\n", elapsed / 10000.0);
+
+	qmap_close(hd);
+}
+
+/* Benchmark: iterate a duplicate run (cached key length impact) */
+void bench_duplicate_iter(void)
+{
+	BENCH("P1.4: duplicate run iteration");
+
+	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 2047, QM_MULTIVALUE | QM_SORTED);
+	for (int i = 0; i < 1000; i++) {
+		uint32_t key = 100;
+		uint32_t value = (uint32_t)i;
+		qmap_put(hd, &key, &value);
+	}
+
+	TIME_START();
+	for (int i = 0; i < 1000; i++) {
+		uint32_t key = 100;
+		uint32_t cur = qmap_get_multi(hd, &key);
+		const void *k, *v;
+
+		while (qmap_next(&k, &v, cur))
+			(void)k, (void)v;
+
+		qmap_fin(cur);
+	}
+	TIME_END(elapsed);
+
+	printf("  1,000 full duplicate scans on 1,000 duplicates: %.2f ms\n", elapsed);
+	printf("  Average per scan: %.4f ms\n", elapsed / 1000.0);
+
+	qmap_close(hd);
+}
+
+/* Benchmark: qmap_drop on standalone maps (P1.5 impact) */
+void bench_drop(void)
+{
+	BENCH("P1.5: qmap_drop performance");
+
+	double total = 0.0;
+
+	for (int run = 0; run < 100; run++) {
+		uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 2047, 0);
+
+		for (uint32_t i = 0; i < 1000; i++)
+			qmap_put(hd, &i, &i);
+
+		TIME_START();
+		qmap_drop(hd);
+		TIME_END(elapsed);
+
+		total += elapsed;
+		qmap_close(hd);
+	}
+
+	printf("  Drop 1,000-entry standalone map (avg of 100 runs): %.4f ms\n",
+			total / 100.0);
+}
+
+/* Benchmark: dense string lookups (hash-cache impact) */
+void bench_dense_lookup(void)
+{
+	BENCH("P1.6: dense string lookup");
+
+	uint32_t hd = qmap_open(NULL, NULL, QM_STR, QM_U32, 2047, 0);
+	char keybuf[32];
+
+	for (uint32_t i = 0; i < 1800; i++) {
+		snprintf(keybuf, sizeof(keybuf), "key%04u", i);
+		qmap_put(hd, keybuf, &i);
+	}
+
+	snprintf(keybuf, sizeof(keybuf), "key1799");
+	TIME_START();
+	for (int i = 0; i < 10000; i++) {
+		const uint32_t *value = qmap_get(hd, keybuf);
+		(void)value;
+	}
+	TIME_END(elapsed);
+
+	printf("  10,000 lookups in 1,800-entry string map: %.2f ms\n", elapsed);
+	printf("  Average per lookup: %.4f ms\n", elapsed / 10000.0);
+
+	qmap_close(hd);
+}
+
+/* Benchmark: string puts on a primary map (payload allocation impact) */
+void bench_put_strings(void)
+{
+	BENCH("P1.7: string put performance");
+
+	double total = 0.0;
+	char keybuf[32];
+	char valbuf[32];
+
+	for (int run = 0; run < 100; run++) {
+		uint32_t hd = qmap_open(NULL, NULL, QM_STR, QM_STR, 2047, 0);
+
+		TIME_START();
+		for (uint32_t i = 0; i < 1000; i++) {
+			snprintf(keybuf, sizeof(keybuf), "key%04u", i);
+			snprintf(valbuf, sizeof(valbuf), "val%04u", i);
+			qmap_put(hd, keybuf, valbuf);
+		}
+		TIME_END(elapsed);
+
+		total += elapsed;
+		qmap_close(hd);
+	}
+
+	printf("  Insert 1,000 string entries (avg of 100 runs): %.4f ms\n",
+			total / 100.0);
 }
 
 /* Benchmark: qmap_count (P1.2 impact) */
@@ -55,13 +198,17 @@ void bench_count(void)
 		
 		/* Create map with N duplicates */
 		uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, capacity, QM_MULTIVALUE | QM_SORTED);
-		for (int i = 0; i < dup_count; i++)
-			qmap_put(hd, &(int){100}, &(int){i});
+		for (int i = 0; i < dup_count; i++) {
+			uint32_t key = 100;
+			uint32_t value = (uint32_t)i;
+			qmap_put(hd, &key, &value);
+		}
 		
 		/* Benchmark: Call qmap_count 1000 times */
 		TIME_START();
 		for (int i = 0; i < 1000; i++) {
-			size_t count = qmap_count(hd, &(int){100});
+			uint32_t key = 100;
+			size_t count = qmap_count(hd, &key);
 			(void)count;  /* Suppress unused warning */
 		}
 		TIME_END(elapsed);
@@ -91,12 +238,18 @@ void bench_del_all(void)
 		for (int run = 0; run < 100; run++) {
 			/* Create map with N duplicates */
 			uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, capacity, QM_MULTIVALUE | QM_SORTED);
-			for (int i = 0; i < dup_count; i++)
-				qmap_put(hd, &(int){100}, &(int){i});
+			for (int i = 0; i < dup_count; i++) {
+				uint32_t key = 100;
+				uint32_t value = (uint32_t)i;
+				qmap_put(hd, &key, &value);
+			}
 			
 			/* Benchmark: Delete all */
 			TIME_START();
-			qmap_del_all(hd, &(int){100});
+			{
+				uint32_t key = 100;
+				qmap_del_all(hd, &key);
+			}
 			TIME_END(elapsed);
 			
 			total_time += elapsed;
@@ -117,26 +270,32 @@ void check_memory(void)
 	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 16383, QM_MULTIVALUE | QM_SORTED);
 	
 	printf("  Adding 10,000 duplicates...\n");
-	for (int i = 0; i < 10000; i++)
-		qmap_put(hd, &(int){100}, &(int){i});
+	for (int i = 0; i < 10000; i++) {
+		uint32_t key = 100;
+		uint32_t value = (uint32_t)i;
+		qmap_put(hd, &key, &value);
+	}
 	
-	size_t count = qmap_count(hd, &(int){100});
-	printf("  Verified count: %zu\n", count);
-	
-	printf("  Iterating through all entries...\n");
-	uint32_t cur = qmap_iter(hd, &(int){100}, 0);
-	size_t iter_count = 0;
-	const void *k, *v;
-	while (qmap_next(&k, &v, cur))
-		iter_count++;
-	qmap_fin(cur);
-	
-	printf("  Iterator count: %zu\n", iter_count);
-	
-	if (count == iter_count && count == 10000)
-		printf("  ✓ All checks passed\n");
-	else
-		printf("  ✗ Mismatch detected!\n");
+	{
+		uint32_t key = 100;
+		size_t count = qmap_count(hd, &key);
+		printf("  Verified count: %zu\n", count);
+		
+		printf("  Iterating through all entries...\n");
+		uint32_t cur = qmap_iter(hd, &key, 0);
+		size_t iter_count = 0;
+		const void *k, *v;
+		while (qmap_next(&k, &v, cur))
+			iter_count++;
+		qmap_fin(cur);
+		
+		printf("  Iterator count: %zu\n", iter_count);
+		
+		if (count == iter_count && count == 10000)
+			printf("  ✓ All checks passed\n");
+		else
+			printf("  ✗ Mismatch detected!\n");
+	}
 	
 	qmap_close(hd);
 }
@@ -148,6 +307,11 @@ int main(void)
 	printf("Date: Mon Feb 23 2026\n");
 	
 	bench_iter_creation();
+	bench_get_multi();
+	bench_duplicate_iter();
+	bench_drop();
+	bench_dense_lookup();
+	bench_put_strings();
 	bench_count();
 	bench_del_all();
 	check_memory();
