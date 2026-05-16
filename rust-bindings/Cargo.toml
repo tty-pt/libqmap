@@ -1,15 +1,18 @@
 [package]
-name = "qmap"
+name = "qmap-rs"
 version = "0.1.0"
 edition = "2021"
 description = "Rust bindings for qmap"
 repository = "https://github.com/quirinpa/qmap"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
-libc = { version = "=0.2.139", default-features = false }
+libc = { version = "0.2", default-features = false }
+
+[build-dependencies]
+bindgen = "0.69"
 
 [profile.release]
 lto = true
