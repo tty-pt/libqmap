@@ -325,6 +325,178 @@ static void test_associations(void) {
 	qmap_close(by_name_hd);
 }
 
+/* Test 8b: Association with pre-existing data */
+static void test_assoc_existing(void) {
+	printf("\n=== Test 8b: Association with Pre-existing Data ===\n");
+
+	printf("Associate AFTER populating (the bug case):");
+	uint32_t prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	for (uint32_t i = 0; i < 10; i++)
+		qmap_put(prim, &i, &i);
+
+	uint32_t sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, QM_MULTIVALUE | QM_SORTED);
+	qmap_assoc(sec, prim, assoc_cb);
+
+	int count = 0;
+	uint32_t cur = qmap_iter(sec, NULL, 0);
+	const void *k, *v;
+	while (qmap_next(&k, &v, cur)) count++;
+	qmap_fin(cur);
+	ASSERT(count == 10, "All 10 pre-existing items in secondary");
+
+	qmap_close(prim);
+	qmap_close(sec);
+	PASS();
+
+	printf("Associate BEFORE populating (existing behavior):");
+	prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, QM_MULTIVALUE | QM_SORTED);
+	qmap_assoc(sec, prim, assoc_cb);
+
+	for (uint32_t i = 0; i < 5; i++)
+		qmap_put(prim, &i, &i);
+
+	count = 0;
+	cur = qmap_iter(sec, NULL, 0);
+	while (qmap_next(&k, &v, cur)) count++;
+	qmap_fin(cur);
+	ASSERT(count == 5, "All 5 post-assoc items in secondary");
+
+	qmap_close(prim);
+	qmap_close(sec);
+	PASS();
+
+	printf("Associate on empty map:");
+	prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, QM_MULTIVALUE | QM_SORTED);
+	qmap_assoc(sec, prim, assoc_cb);
+
+	count = 0;
+	cur = qmap_iter(sec, NULL, 0);
+	while (qmap_next(&k, &v, cur)) count++;
+	qmap_fin(cur);
+	ASSERT(count == 0, "Empty secondary stays empty");
+
+	qmap_close(prim);
+	qmap_close(sec);
+	PASS();
+}
+
+/* Test 8c: Association delete cleanup */
+static void test_assoc_delete_cleanup(void) {
+	printf("\n=== Test 8c: Association Delete Cleanup ===\n");
+
+	printf("Delete from primary cleans secondary entry:");
+	uint32_t prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	uint32_t sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	qmap_assoc(sec, prim, assoc_cb);
+
+	for (uint32_t i = 0; i < 10; i++)
+		qmap_put(prim, &i, &(uint32_t){i * 10});
+
+	int count = 0;
+	uint32_t cur = qmap_iter(sec, NULL, 0);
+	const void *k, *v;
+	while (qmap_next(&k, &v, cur)) count++;
+	qmap_fin(cur);
+	ASSERT(count == 10, "10 items in secondary before delete");
+
+	qmap_del(prim, &(uint32_t){3});
+	count = 0;
+	cur = qmap_iter(sec, NULL, 0);
+	while (qmap_next(&k, &v, cur)) count++;
+	qmap_fin(cur);
+	ASSERT(count == 9, "9 items in secondary after delete");
+
+	const uint32_t *gone = qmap_get(sec, &(uint32_t){30});
+	ASSERT(gone == NULL, "Deleted secondary key returns NULL");
+
+	qmap_close(prim);
+	qmap_close(sec);
+	PASS();
+}
+
+/* Test 8d: Association update cleanup */
+static void test_assoc_update_cleanup(void) {
+	printf("\n=== Test 8d: Association Update Cleanup ===\n");
+
+	printf("Update primary value cleans old secondary key:");
+	uint32_t prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	uint32_t sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	qmap_assoc(sec, prim, assoc_cb);
+
+	uint32_t val = 10;
+	qmap_put(prim, &(uint32_t){1}, &val);
+
+	int count = 0;
+	uint32_t cur = qmap_iter(sec, NULL, 0);
+	const void *k, *v;
+	while (qmap_next(&k, &v, cur)) count++;
+	qmap_fin(cur);
+	ASSERT(count == 1, "1 item in secondary before update");
+
+	const uint32_t *got = qmap_get(sec, &(uint32_t){10});
+	ASSERT(got != NULL, "Secondary key 10 exists");
+
+	val = 20;
+	qmap_put(prim, &(uint32_t){1}, &val);
+
+	count = 0;
+	cur = qmap_iter(sec, NULL, 0);
+	while (qmap_next(&k, &v, cur)) count++;
+	qmap_fin(cur);
+	ASSERT(count == 1, "1 item in secondary after update (old removed)");
+
+	got = qmap_get(sec, &(uint32_t){20});
+	ASSERT(got != NULL, "New secondary key 20 exists");
+
+	got = qmap_get(sec, &(uint32_t){10});
+	ASSERT(got == NULL, "Old secondary key 10 removed");
+
+	qmap_close(prim);
+	qmap_close(sec);
+	PASS();
+}
+
+/* Test 8e: Association zombie detection via counting */
+static void test_assoc_zombie_check(void) {
+	printf("\n=== Test 8e: Association Zombie Check (QM_PGET) ===\n");
+
+	printf("Delete from primary, verify secondary count drops:");
+	uint32_t prim = qmap_open(NULL, NULL, QM_U32, QM_STR, 0xFF, 0);
+	uint32_t sec = qmap_open(NULL, NULL, QM_STR, QM_U32, 0xFF, QM_PGET);
+	qmap_assoc(sec, prim, assoc_cb);
+
+	qmap_put(prim, &(uint32_t){100}, "alice");
+	qmap_put(prim, &(uint32_t){200}, "bob");
+	qmap_put(prim, &(uint32_t){300}, "charlie");
+
+	int count = 0;
+	uint32_t cur = qmap_iter(sec, NULL, 0);
+	const void *k, *v;
+	while (qmap_next(&k, &v, cur)) count++;
+	qmap_fin(cur);
+	ASSERT(count == 3, "3 items in secondary before delete");
+
+	qmap_del(prim, &(uint32_t){100});
+	count = 0;
+	cur = qmap_iter(sec, NULL, 0);
+	while (qmap_next(&k, &v, cur)) {
+		const uint32_t *pv = (const uint32_t *)v;
+		ASSERT(*pv == 200 || *pv == 300, "Remaining values valid");
+		count++;
+	}
+	qmap_fin(cur);
+	ASSERT(count == 2, "2 items in secondary after delete (no zombies)");
+
+	const uint32_t *u = qmap_get(sec, "alice");
+	ASSERT(u == NULL, "Deleted name returns NULL");
+
+	qmap_close(prim);
+	qmap_close(sec);
+	PASS();
+}
+
 /* Test 9: File persistence */
 static void test_file_persistence(void) {
 	printf("\n=== Test 9: File Persistence ===\n");
@@ -675,6 +847,10 @@ int main(void) {
 	test_iterator_edge_cases();
 	test_mirror_maps();
 	test_associations();
+	test_assoc_existing();
+	test_assoc_delete_cleanup();
+	test_assoc_update_cleanup();
+	test_assoc_zombie_check();
 	test_file_persistence();
 	test_hndl_type();
 	test_ptr_type();

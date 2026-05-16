@@ -936,6 +936,18 @@ _qmap_put(uint32_t hd, const void * key,
 
   qmap->omap[n] = rkey;
 
+  /* When sharing a position with the primary on updates, a different
+   * secondary key may overwrite the same position. Clear any stale hash
+   * entries that still point to this position from the former key. */
+  if (head->phd != hd && pn != QM_MISS) {
+    for (uint32_t i = 0; i < head->m; i++) {
+      if (qmap->map[i] == n) {
+        qmap->map[i] = QM_MISS;
+        break;
+      }
+    }
+  }
+
   /* For QM_MULTIVALUE duplicates, don't update hash table */
   if (!(head->flags & QM_MULTIVALUE) || qmap->map[lookup_id] == QM_MISS || qmap->map[lookup_id] == n)
     qmap->map[lookup_id] = n;
@@ -971,12 +983,15 @@ qmap_put(uint32_t hd, const void * const key,
     ahead = &qmap_heads[ahd];
     aqmap->assoc(&skey, rkey, rval);
 
-    /* Only share positions with QM_MIRROR maps.
-     * General secondary indexes (qmap_assoc) get independent positions. */
+    /* Share positions with QM_MIRROR and non-MULTIVALUE linked maps.
+     * MULTIVALUE linked maps keep independent positions to avoid
+     * hash table repointing complexity on duplicate removal. */
     if (ahead->iflags & QM_IS_MIRROR) {
       _qmap_put(ahd, skey, rval, n);  /* Mirror: share position */
+    } else if (ahead->flags & QM_MULTIVALUE) {
+      _qmap_put(ahd, skey, rval, QM_MISS);  /* MULTIVALUE: independent */
     } else {
-      _qmap_put(ahd, skey, rval, QM_MISS);  /* Secondary index: independent */
+      _qmap_put(ahd, skey, rval, n);  /* General: share position */
     }
   }
 
@@ -1448,6 +1463,18 @@ qmap_assoc(uint32_t hd, uint32_t link, qmap_assoc_t cb)
 
   free(qmap->table);
   qmap->table = NULL;
+
+  if (qmap_heads[link].n > 0) {
+    uint32_t cur = qmap_iter(link, NULL, 0);
+    const void *key, *value;
+
+    while (qmap_next(&key, &value, cur)) {
+      const void *skey;
+      qmap->assoc(&skey, key, value);
+      _qmap_put(hd, skey, value, QM_MISS);
+    }
+    qmap_fin(cur);
+  }
 }
 
   uint32_t /* API */
