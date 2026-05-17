@@ -1168,6 +1168,7 @@ qmap_del(uint32_t hd, const void * const key)
     /* For regular maps, delete all matching entries */
     while (qmap_lnext(&sn, cur))
       qmap_ndel(hd, sn);
+    qmap_fin(cur);
   }
 }
 
