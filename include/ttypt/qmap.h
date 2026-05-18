@@ -95,6 +95,25 @@ enum qmap_flags {
 };
 
 /**
+ * @brief Macro and mask for record-aware maps.
+ *
+ * Pass QM_RECORD(record_id) as the flags parameter to qmap_open to
+ * enable record-aware access.  The map must have ktype=QM_STR and
+ * vtype equal to the struct type ID returned by
+ * qmap_record_type_id(record_id).
+ *
+ * When a map is record-aware, keys containing ':' are treated as
+ * composite keys "struct_key:field_name" and resolve to a pointer
+ * directly into the stored struct's pool allocation at the field's
+ * byte offset.  This allows whole-struct storage and per-field access
+ * to coexist without data duplication.
+ */
+#define QM_RECORD_MASK   0x0000FF00u
+#define QM_RECORD_FLAG   0x00010000u
+#define QM_RECORD_ID(f)  (((f) & QM_RECORD_MASK) >> 8)
+#define QM_RECORD(id)    (QM_RECORD_FLAG | (((id) & 0xFF) << 8))
+
+/**
  * @brief Built-in type identifiers.
  */
 enum qmap_tbi {
@@ -110,6 +129,16 @@ enum qmap_tbi {
   /** 32-bit unsigned integer (hash and mask). */
   QM_U32  = 3,
 };
+
+/**
+ * @brief Record field type constants.
+ *
+ * These are only meaningful as qmap_record_field_t.type values,
+ * NOT as key/value types for qmap_open().
+ */
+#define QM_REFERENCE          6  /**< Single uint32_t position in target's map. */
+#define QM_MULTI_REFERENCE    7  /**< \n-separated positions in char[max_size]. */
+#define QM_VSTR               8  /**< Variable-length string stored outside the struct. */
 
 /**
  * @brief Iterator flags.
@@ -186,6 +215,16 @@ uint32_t qmap_open(const char *filename,
                    uint32_t vtype,
                    uint32_t mask,
                    uint32_t flags);
+
+/**
+ * @brief Returns the value type (vtype) of a map.
+ */
+uint32_t qmap_get_vtype(uint32_t hd);
+
+/**
+ * @brief Returns the fixed length of a type, or 0 if variable.
+ */
+size_t qmap_type_len(uint32_t type_id);
 
 /**
  * @brief Write all file-backed maps to disk.
@@ -354,14 +393,16 @@ void qmap_drop(uint32_t hd);
  * Deletes on the primary remove corresponding
  * entries from the secondary.
  *
- * @param[out] skey  Pointer to set secondary key.
- * @param[in]  pkey  Primary key.
- * @param[in]  value Primary value.
+ * @param[out] skey     Pointer to set secondary key.
+ * @param[in]  pkey     Primary key.
+ * @param[in]  value    Primary value.
+ * @param[in]  userdata User context pointer (from qmap_assoc call).
  */
 typedef void qmap_assoc_t(
   const void **skey,
   const void * const pkey,
-  const void * const value);
+  const void * const value,
+  void *userdata);
 
 /**
  * @brief Make an association between tables.
@@ -370,10 +411,11 @@ typedef void qmap_assoc_t(
  * put/delete operations on the primary automatically update
  * the secondary. The callback determines the secondary key.
  *
- * @param[in] hd   Secondary (index) map handle.
- * @param[in] link Primary (source) map handle.
- * @param[in] cb   Callback to produce secondary
- *                 keys. NULL → use primary value.
+ * @param[in] hd       Secondary (index) map handle.
+ * @param[in] link     Primary (source) map handle.
+ * @param[in] cb       Callback to produce secondary
+ *                     keys. NULL → use primary value.
+ * @param[in] userdata User context pointer passed to callback.
  *
  * @note The secondary map stores (secondary_key, primary_value).
  *       To retrieve the primary KEY instead of the primary VALUE,
@@ -406,7 +448,54 @@ typedef void qmap_assoc_t(
  */
 void qmap_assoc(uint32_t hd,
                 uint32_t link,
-                qmap_assoc_t cb);
+                qmap_assoc_t cb,
+                void *userdata);
+
+/**
+ * @brief Multi-key association callback type.
+ *
+ * Produces multiple secondary keys from a single primary entry.
+ * Used by qmap_assoc_multi for fields that reference multiple values
+ * (e.g., multi-reference dataset fields).
+ *
+ * Callback fills skeys[0..returned_count-1] with key pointers.
+ * Each key is copied by qmap internally; callback-owned temporary
+ * copies must remain valid until the callback returns.
+ *
+ * @param[out] skeys     Array to fill with secondary key pointers.
+ * @param[in]  max_skeys Capacity of skeys array.
+ * @param[in]  pkey      Primary key.
+ * @param[in]  value     Primary value.
+ * @param[in]  userdata  User context pointer (from qmap_assoc_multi call).
+ * @return               Number of keys written to skeys.
+ */
+typedef size_t qmap_assoc_multi_t(
+	const void **skeys,
+	size_t max_skeys,
+	const void *pkey,
+	const void *value,
+	void *userdata);
+
+/**
+ * @brief Make a multi-key association between tables.
+ *
+ * Like qmap_assoc, but the callback produces multiple secondary keys
+ * from a single primary entry. The secondary is a root map (independent
+ * position space) with KEY=vtype=QM_STR, VALUE=ktype=QM_STR, and
+ * QM_MULTIVALUE|QM_SORTED flags. Each entry stores (ref_value, primary_key).
+ *
+ * Puts to the primary automatically insert entries into the secondary.
+ * Deletes from the primary automatically remove matching secondary entries.
+ *
+ * @param[in] hd       Secondary (index) map handle (root map, QM_STR/QM_STR).
+ * @param[in] link     Primary (source) map handle.
+ * @param[in] cb       Multi-key callback.
+ * @param[in] userdata User context pointer passed to callback.
+ */
+void qmap_assoc_multi(uint32_t hd,
+                      uint32_t link,
+                      qmap_assoc_multi_t cb,
+                      void *userdata);
 
 /** @} */
 
@@ -601,6 +690,173 @@ uint32_t qmap_mreg(qmap_measure_t *measure);
  */
 size_t qmap_len(uint32_t type_id,
                 const void *data);
+
+/** @defgroup qmap_record Record-Aware Maps
+ *  @brief Functions for record-aware (struct-aware) maps.
+ *
+ * Record-aware maps store C struct values by-key and automatically
+ * resolve composite keys (e.g. "id:fieldname") to field offsets
+ * within the stored struct.  No per-field entries are stored — the
+ * struct is the single source of truth.
+ *
+ * Usage:
+ * @code
+ * typedef struct { char title[256]; uint32_t age; } item_t;
+ *
+ * uint32_t rec = qmap_record_register("item",
+ *     sizeof(item_t),
+ *     (qmap_record_field_t[]){
+ *         { "title", QM_STR, offsetof(item_t, title),
+ *           sizeof(((item_t*)0)->title) },
+ *         { "age",   QM_U32, offsetof(item_t, age),
+ *           sizeof(uint32_t) },
+ *     }, 2);
+ *
+ * uint32_t hd = qmap_open(NULL, NULL, QM_STR,
+ *                         qmap_record_type_id(rec),
+ *                         0xFF, QM_RECORD(rec));
+ *
+ * item_t row = { .title = "Hello", .age = 42 };
+ * qmap_put(hd, "item1", &row);        // store whole struct
+ * const char *t = qmap_get(hd, "item1:title");  // → &row.title
+ * const uint32_t *a = qmap_get(hd, "item1:age"); // → &row.age
+ * @endcode
+ *
+ * @{
+ */
+
+/**
+ * @brief Describes a single field in a record layout.
+ * @see qmap_record_register
+ */
+typedef struct {
+  const char *name;      /**< Field name (e.g. "title"). */
+  uint32_t type;         /**< QM_STR, QM_U32, QM_REFERENCE, QM_MULTI_REFERENCE. */
+  size_t offset;         /**< offsetof(struct_type, field). */
+  size_t max_size;       /**< Buffer capacity for inline QM_STR / QM_MULTI_REFERENCE arrays. */
+  uint32_t target_record; /**< Record ID of the target map (0 = none). */
+  uint32_t target_hd;     /**< Head handle for target map (qmap_field_put auto-resolve). Set via qmap_record_field_set_target_hd(). */
+  const char *inverse;   /**< Field name on target for inverse lookups, or NULL. */
+} qmap_record_field_t;
+
+/**
+ * @brief Register a record layout describing a C struct.
+ *
+ * Internally calls qmap_reg(struct_size) to create a fixed-length
+ * type for the struct.  The returned record_id is used with
+ * QM_RECORD(record_id) in qmap_open().
+ *
+ * @param[in] name         Record name (for debugging, copied internally).
+ * @param[in] struct_size  sizeof(struct).
+ * @param[in] fields       Array of field descriptors.
+ * @param[in] field_count  Number of fields.
+ * @return Record ID for use with QM_RECORD(), or QM_MISS on failure.
+ */
+uint32_t qmap_record_register(
+  const char *name,
+  size_t struct_size,
+  const qmap_record_field_t *fields,
+  size_t field_count);
+
+/**
+ * @brief Get the struct type ID registered for a record.
+ *
+ * @param[in] record_id  Record ID from qmap_record_register().
+ * @return Type ID for use as vtype in qmap_open(), or QM_MISS.
+ */
+uint32_t qmap_record_type_id(uint32_t record_id);
+
+/**
+ * @brief Get the string key at a given position number.
+ *
+ * For record-aware maps this is the item ID (e.g. "choir1").
+ *
+ * @param[in] hd   Map handle.
+ * @param[in] pos  Position number.
+ * @return         Key string, or NULL if pos is out of range.
+ */
+const char *qmap_get_key(uint32_t hd, uint32_t pos);
+
+/**
+ * @brief Get the position number for a given key string.
+ *
+ * Performs an O(n) linear scan of the map entries.  Used when
+ * converting filesystem string IDs to position numbers for
+ * reference fields.
+ *
+ * @param[in] hd   Map handle (must be record-aware, QM_STR keys).
+ * @param[in] key  Key string to look up.
+ * @return         Position number, or UINT32_MAX if not found.
+ */
+uint32_t qmap_pos(uint32_t hd, const char *key);
+
+/**
+ * @brief Query the inverse index for a reference field.
+ *
+ * Returns all source positions that reference @p target_pos
+ * via the named reference field.
+ *
+ * @param[in]  hd          Map handle.
+ * @param[in]  field_name  Reference field name.
+ * @param[in]  target_pos  Position in the target record-aware map.
+ * @param[out] out         Array to fill with source positions.
+ * @param[in]  max         Capacity of out[].
+ * @return Number of positions written to out[].
+ */
+size_t qmap_inv_get(uint32_t hd, const char *field_name,
+                    uint32_t target_pos,
+                    uint32_t *out, size_t max);
+
+/**
+ * @brief Set the target head handle for reference resolution.
+ *
+ * After both source and target maps exist, configure a reference
+ * field so that qmap_field_put() can auto-resolve string IDs
+ * to positions via qmap_pos(target_hd, id).
+ *
+ * @param[in] record_id    Record ID from qmap_record_register().
+ * @param[in] field_name   Field name.
+ * @param[in] target_hd    Head handle of the target map (e.g. song.items).
+ */
+void qmap_record_field_set_target_hd(uint32_t record_id,
+                                     const char *field_name,
+                                     uint32_t target_hd);
+
+/**
+ * @brief Put a field value into a record-aware map, auto-resolving
+ *        references when the field is QM_REFERENCE / QM_MULTI_REFERENCE
+ *        and target_hd is set.
+ *
+ * For QM_REFERENCE: resolves @p value (a string ID) to a position via
+ * qmap_pos(target_hd, value) before calling qmap_put.
+ * For QM_MULTI_REFERENCE: splits @p value on newlines, resolves each
+ * ID, and joins the positions with newlines.
+ * For QM_STR: passes @p value through unchanged.
+ *
+ * @return qmap_put result (position number, or 0 on error).
+ */
+uint32_t qmap_field_put(uint32_t hd, const char *item_id,
+                        const char *field_name, const char *value);
+
+/**
+ * @brief Get a field value from a record-aware map, auto-resolving
+ *        references when the field is QM_REFERENCE.
+ *
+ * Inverse of qmap_field_put().
+ *
+ * For QM_STR: returns the string value directly (points into struct memory).
+ * For QM_REFERENCE: resolves the stored position back to the target ID
+ * string via qmap_get_key(target_hd, pos).
+ * For QM_MULTI_REFERENCE and other types: returns the raw value pointer
+ * (caller must know the type).
+ *
+ * @param[in] hd         Record-aware map handle.
+ * @param[in] item_id    Record key (entry ID).
+ * @param[in] field_name Field name.
+ * @return               String value (qmap-managed, do not free), or NULL.
+ */
+const char *qmap_field_get(uint32_t hd, const char *item_id,
+                           const char *field_name);
 
 /** @} */
 

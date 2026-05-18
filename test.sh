@@ -20,6 +20,7 @@ rm *.db 2>/dev/null || true
 ./bin/test | diff expects.txt -
 ./bin/test_extended
 ./bin/test_multivalue
+./bin/test_record
 
 adb=a.db:a:u
 bdb=b.db:a

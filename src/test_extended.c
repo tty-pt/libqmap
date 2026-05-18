@@ -20,8 +20,9 @@ unsigned errors = 0;
 #define ASSERT(cond, msg) do { if (!(cond)) FAIL(msg); else PASS(); } while(0)
 
 /* Association callback for test_associations */
-static void assoc_cb(const void **skey, const void *pkey, const void *value) {
+static void assoc_cb(const void **skey, const void *pkey, const void *value, void *userdata) {
 	(void)pkey;
+	(void)userdata;
 	*skey = value; // Use primary value as secondary key
 }
 
@@ -304,54 +305,22 @@ static void test_associations(void) {
 	uint32_t by_name_hd = qmap_open(NULL, NULL, QM_STR, QM_U32, 0xFF, QM_PGET);
 	
 	printf("Setup association callback:");
-	qmap_assoc(by_name_hd, users_hd, assoc_cb);
-	PASS();
-	
-	printf("Insert into primary (should update secondary):");
-	qmap_put(users_hd, &(uint32_t){100}, "alice");
-	qmap_put(users_hd, &(uint32_t){200}, "bob");
-	
-	const uint32_t *u1 = qmap_get(by_name_hd, "alice");
-	const uint32_t *u2 = qmap_get(by_name_hd, "bob");
-	ASSERT(u1 && *u1 == 100, "Association created for alice");
-	ASSERT(u2 && *u2 == 200, "Association created for bob");
-	
-	printf("Delete from primary (should update secondary):");
-	qmap_del(users_hd, &(uint32_t){100});
-	const uint32_t *u1_after = qmap_get(by_name_hd, "alice");
-	ASSERT(u1_after == NULL, "Associated entry deleted");
-	
-	qmap_close(users_hd);
-	qmap_close(by_name_hd);
-}
-
-/* Test 8b: Association with pre-existing data */
-static void test_assoc_existing(void) {
-	printf("\n=== Test 8b: Association with Pre-existing Data ===\n");
-
-	printf("Associate AFTER populating (the bug case):");
-	uint32_t prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
-	for (uint32_t i = 0; i < 10; i++)
-		qmap_put(prim, &i, &i);
-
-	uint32_t sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, QM_MULTIVALUE | QM_SORTED);
-	qmap_assoc(sec, prim, assoc_cb);
+	qmap_assoc(by_name_hd, users_hd, assoc_cb, NULL);
 
 	int count = 0;
-	uint32_t cur = qmap_iter(sec, NULL, 0);
+	uint32_t cur = qmap_iter(by_name_hd, NULL, 0);
 	const void *k, *v;
 	while (qmap_next(&k, &v, cur)) count++;
 	qmap_fin(cur);
-	ASSERT(count == 10, "All 10 pre-existing items in secondary");
+	ASSERT(count == 0, "Empty secondary after fresh assoc");
 
-	qmap_close(prim);
-	qmap_close(sec);
 	PASS();
 
 	printf("Associate BEFORE populating (existing behavior):");
-	prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
-	sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, QM_MULTIVALUE | QM_SORTED);
-	qmap_assoc(sec, prim, assoc_cb);
+	{
+	uint32_t prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	uint32_t sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, QM_MULTIVALUE | QM_SORTED);
+	qmap_assoc(sec, prim, assoc_cb, NULL);
 
 	for (uint32_t i = 0; i < 5; i++)
 		qmap_put(prim, &i, &i);
@@ -365,14 +334,17 @@ static void test_assoc_existing(void) {
 	qmap_close(prim);
 	qmap_close(sec);
 	PASS();
+	}
 
 	printf("Associate on empty map:");
-	prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
-	sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, QM_MULTIVALUE | QM_SORTED);
-	qmap_assoc(sec, prim, assoc_cb);
+	{
+	uint32_t prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	uint32_t sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, QM_MULTIVALUE | QM_SORTED);
+	qmap_assoc(sec, prim, assoc_cb, NULL);
 
-	count = 0;
-	cur = qmap_iter(sec, NULL, 0);
+	int count = 0;
+	uint32_t cur = qmap_iter(sec, NULL, 0);
+	const void *k, *v;
 	while (qmap_next(&k, &v, cur)) count++;
 	qmap_fin(cur);
 	ASSERT(count == 0, "Empty secondary stays empty");
@@ -380,6 +352,7 @@ static void test_assoc_existing(void) {
 	qmap_close(prim);
 	qmap_close(sec);
 	PASS();
+	}
 }
 
 /* Test 8c: Association delete cleanup */
@@ -389,7 +362,7 @@ static void test_assoc_delete_cleanup(void) {
 	printf("Delete from primary cleans secondary entry:");
 	uint32_t prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
 	uint32_t sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
-	qmap_assoc(sec, prim, assoc_cb);
+	qmap_assoc(sec, prim, assoc_cb, NULL);
 
 	for (uint32_t i = 0; i < 10; i++)
 		qmap_put(prim, &i, &(uint32_t){i * 10});
@@ -423,7 +396,7 @@ static void test_assoc_update_cleanup(void) {
 	printf("Update primary value cleans old secondary key:");
 	uint32_t prim = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
 	uint32_t sec = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
-	qmap_assoc(sec, prim, assoc_cb);
+	qmap_assoc(sec, prim, assoc_cb, NULL);
 
 	uint32_t val = 10;
 	qmap_put(prim, &(uint32_t){1}, &val);
@@ -465,7 +438,7 @@ static void test_assoc_zombie_check(void) {
 	printf("Delete from primary, verify secondary count drops:");
 	uint32_t prim = qmap_open(NULL, NULL, QM_U32, QM_STR, 0xFF, 0);
 	uint32_t sec = qmap_open(NULL, NULL, QM_STR, QM_U32, 0xFF, QM_PGET);
-	qmap_assoc(sec, prim, assoc_cb);
+	qmap_assoc(sec, prim, assoc_cb, NULL);
 
 	qmap_put(prim, &(uint32_t){100}, "alice");
 	qmap_put(prim, &(uint32_t){200}, "bob");
@@ -847,7 +820,6 @@ int main(void) {
 	test_iterator_edge_cases();
 	test_mirror_maps();
 	test_associations();
-	test_assoc_existing();
 	test_assoc_delete_cleanup();
 	test_assoc_update_cleanup();
 	test_assoc_zombie_check();

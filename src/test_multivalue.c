@@ -126,9 +126,10 @@ typedef struct {
 } employee_t;
 
 /* Association callback to extract max time */
-static void extract_max(const void **skey, const void *pkey, const void *value)
+static void extract_max(const void **skey, const void *pkey, const void *value, void *userdata)
 {
 	(void)pkey;
+	(void)userdata;
 	const struct interval *iv = value;
 	static time_t max_time;
 	max_time = iv->max;
@@ -136,16 +137,17 @@ static void extract_max(const void **skey, const void *pkey, const void *value)
 }
 
 /* Extract callbacks for employee indexes */
-static void extract_dept(const void **skey, const void *pkey, const void *value)
+static void extract_dept(const void **skey, const void *pkey, const void *value, void *userdata)
 {
 	(void)pkey;
+	(void)userdata;
 	const employee_t *emp = value;
 	static uint32_t dept;
 	dept = emp->dept;
 	*skey = &dept;
 }
 
-static void extract_year(const void **skey, const void *pkey, const void *value)
+static void extract_year(const void **skey, const void *pkey, const void *value, void *userdata)
 {
 	(void)pkey;
 	const employee_t *emp = value;
@@ -166,7 +168,7 @@ static void test_multivalue_intervals(void)
 	uint32_t by_time = qmap_open(NULL, "by_time", qm_time, qm_interval, 0xFF,
 	                              QM_SORTED | QM_MULTIVALUE);
 	
-	qmap_assoc(by_time, primary, extract_max);
+	qmap_assoc(by_time, primary, extract_max, NULL);
 	
 	/* Two intervals with SAME max time (this was the bug!) */
 	struct interval i1 = {.min=100, .max=9999, .who=1};
@@ -443,7 +445,7 @@ static void test_multivalue_idm_tracking(void)
 	uint32_t by_time = qmap_open(NULL, "by_time", qm_time, qm_interval, 0xFF,
 	                              QM_SORTED | QM_MULTIVALUE);
 	
-	qmap_assoc(by_time, primary, extract_max);
+	qmap_assoc(by_time, primary, extract_max, NULL);
 	
 	/* Insert entries that will create high position numbers
 	 * This tests the case where pn >= idm.last */
@@ -688,7 +690,7 @@ static void test_multivalue_multiple_indexes(void)
 	
 	assert(primary != QM_MISS && by_dept != QM_MISS);
 	
-	qmap_assoc(by_dept, primary, extract_dept);
+	qmap_assoc(by_dept, primary, extract_dept, NULL);
 	
 	/* Create 3 employees all in the same department */
 	employee_t employees[3] = {

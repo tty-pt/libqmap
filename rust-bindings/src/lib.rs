@@ -2,11 +2,12 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+use libc::{c_char, c_void};
 use std::ffi::{CStr, CString};
 use std::ptr;
-use libc::{c_char, c_void};
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+mod bindings;
+pub use bindings::*;
 
 pub const QM_MISS: u32 = u32::MAX;
 
@@ -55,6 +56,70 @@ impl Qmap {
         Qmap { hd }
     }
 
+    /// Discover the value type of this map at runtime.
+    pub fn get_vtype(&self) -> u32 {
+        unsafe { qmap_get_vtype(self.hd) }
+    }
+
+    /// Register a fixed-length type.
+    pub fn reg_fixed(len: usize) -> u32 {
+        unsafe { qmap_reg(len) }
+    }
+
+    /// Register a variable-length type with a measure callback.
+    pub fn reg_variable(measure: qmap_measure_t) -> u32 {
+        unsafe { qmap_mreg(measure) }
+    }
+
+    /// Get the byte length of a stored value.
+    pub fn len(type_id: u32, data: *const c_void) -> usize {
+        unsafe { qmap_len(type_id, data) }
+    }
+
+    /// Get a typed reference to a stored value.
+    /// # Safety
+    /// Caller must ensure `T` matches the actual value type of the map.
+    pub unsafe fn get_raw<T>(&self, key: *const c_void) -> Option<&T> {
+        let ptr = qmap_get(self.hd, key);
+        if ptr.is_null() { None } else { Some(&*(ptr as *const T)) }
+    }
+
+    /// Get a byte slice for a stored value using the map's value type.
+    /// # Safety
+    /// The returned slice borrows from the qmap internal storage.
+    pub unsafe fn get_bytes(&self, key: *const c_void) -> Option<&[u8]> {
+        let ptr = qmap_get(self.hd, key);
+        if ptr.is_null() { return None; }
+        let vtype = self.get_vtype();
+        let len = Self::len(vtype, ptr);
+        Some(std::slice::from_raw_parts(ptr as *const u8, len))
+    }
+
+    /// Store a typed value.
+    /// # Safety
+    /// Caller must ensure `T` matches the actual value type of the map.
+    pub unsafe fn put_raw<T>(&self, key: *const c_void, value: &T) -> u32 {
+        qmap_put(self.hd, key, value as *const T as *const c_void)
+    }
+
+    /// Create an association (secondary index) from this map to a primary map.
+    /// # Safety
+    /// The callback must produce valid secondary keys. The link must be a valid
+    /// primary map handle.
+    pub unsafe fn assoc(&self, link: u32, cb: qmap_assoc_t, userdata: *mut c_void) {
+        qmap_assoc(self.hd, link, cb, userdata)
+    }
+
+    /// Create a multi-key association (secondary index) from this map to a
+    /// primary map. The callback produces multiple secondary keys from one
+    /// primary entry.
+    /// # Safety
+    /// The callback must produce valid secondary key pointers. The link must
+    /// be a valid primary map handle.
+    pub unsafe fn assoc_multi(&self, link: u32, cb: qmap_assoc_multi_t, userdata: *mut c_void) {
+        qmap_assoc_multi(self.hd, link, cb, userdata)
+    }
+
     pub fn get(&self, key: *const c_void) -> *const c_void {
         unsafe { qmap_get(self.hd, key) }
     }
@@ -65,9 +130,7 @@ impl Qmap {
         if val_ptr.is_null() {
             None
         } else {
-            unsafe {
-                CStr::from_ptr(val_ptr as *const c_char).to_str().ok()
-            }
+            unsafe { CStr::from_ptr(val_ptr as *const c_char).to_str().ok() }
         }
     }
 
@@ -97,7 +160,27 @@ impl Qmap {
 
     pub fn iter(&self, key: *const c_void, flags: u32) -> Cursor {
         let cur_id = unsafe { qmap_iter(self.hd, key, flags) };
+        println!("DEBUG: qmap_iter(hd={}, key={:?}, flags={}) returned cur_id={}", self.hd, key, flags, cur_id);
         Cursor { cur_id }
+    }
+
+    pub fn get_multi(&self, key: *const c_void) -> u32 {
+        unsafe { qmap_get_multi(self.hd, key) }
+    }
+
+    pub fn next(&self, cur_id: u32) -> Option<(*const c_void, *const c_void)> {
+        let mut key: *const c_void = ptr::null();
+        let mut value: *const c_void = ptr::null();
+        let res = unsafe { qmap_next(&mut key, &mut value, cur_id) };
+        if res == 1 {
+            Some((key, value))
+        } else {
+            None
+        }
+    }
+
+    pub fn fin(&self, cur_id: u32) {
+        unsafe { qmap_fin(cur_id) }
     }
 }
 
@@ -116,6 +199,7 @@ impl Cursor {
         let mut key: *const c_void = ptr::null();
         let mut value: *const c_void = ptr::null();
         let res = unsafe { qmap_next(&mut key, &mut value, self.cur_id) };
+        println!("DEBUG: qmap_next(cur_id={}) returned res={} (key={:?}, value={:?})", self.cur_id, res, key, value);
         if res == 1 {
             Some((key, value))
         } else {
@@ -146,5 +230,30 @@ mod tests {
         q.put_str("key1", "value1");
         assert_eq!(q.get_str("key1"), Some("value1"));
         assert_eq!(q.get_str("key2"), None);
+    }
+
+    #[test]
+    fn test_fixed_type_and_raw_access() {
+        // Register a fixed type for u32
+        let t = Qmap::reg_fixed(4);
+        assert_ne!(t, QM_MISS);
+
+        // Open a map with this type for values
+        let q = Qmap::open(None, None, qmap_tbi_QM_STR, t, 0xFF, 0).unwrap();
+        let key = std::ffi::CString::new("count").unwrap();
+        let val: u32 = 42;
+
+        unsafe {
+            q.put_raw(key.as_ptr() as *const c_void, &val);
+            let stored: &u32 = q.get_raw(key.as_ptr() as *const c_void).unwrap();
+            assert_eq!(*stored, 42);
+            assert_eq!(Qmap::len(t, stored as *const u32 as *const c_void), 4);
+        }
+    }
+
+    #[test]
+    fn test_get_vtype() {
+        let q = Qmap::open(None, None, qmap_tbi_QM_STR, qmap_tbi_QM_STR, 0xFF, 0).unwrap();
+        assert_eq!(q.get_vtype(), qmap_tbi_QM_STR);
     }
 }

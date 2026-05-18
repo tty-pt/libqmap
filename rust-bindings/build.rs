@@ -1,39 +1,12 @@
-use std::env;
-use std::path::PathBuf;
-
 fn main() {
-    // Tell cargo to tell rustc to link the system qmap shared library.
-    println!("cargo:rustc-link-lib=dylib=qmap");
+    // Link against libqmap — the C library must be installed separately.
+    // Use QMAP_DIR to point to a custom installation (e.g. QMAP_DIR=/usr/local).
+    if let Ok(dir) = std::env::var("QMAP_DIR") {
+        println!("cargo:rustc-link-search={}/lib", dir);
+    }
+    println!("cargo:rustc-link-lib=qmap");
 
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let lib_path = PathBuf::from(&manifest_dir).join("../lib");
-    let abs_lib_path = std::fs::canonicalize(lib_path).unwrap();
-    println!("cargo:rustc-link-search=native={}", abs_lib_path.display());
-    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", abs_lib_path.display());
-
-    // Tell cargo to invalidate the built crate whenever the wrapper changes
-    println!("cargo:rerun-if-changed=../include/ttypt/qmap.h");
-
-    // The bindgen::Builder is the main entry point
-    // to bindgen, and lets you build up options for
-    // the resulting bindings.
-    let bindings = bindgen::Builder::default()
-        // The input header we would like to generate
-        // bindings for.
-        .header("../include/ttypt/qmap.h")
-        // Tell cargo to invalidate the built crate whenever any of the
-        // included header files changed.
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        // Use libc types
-        .ctypes_prefix("libc")
-        // Finish the builder and generate the bindings.
-        .generate()
-        // Unwrap the Result and panic on failure.
-        .expect("Unable to generate bindings");
-
-    // Write the bindings to the $OUT_DIR/bindings.rs file.
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings
-        .write_to_file(out_path.join("bindings.rs"))
-        .expect("Couldn't write bindings!");
+    // Rebuild when this script or QMAP_DIR changes.
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=QMAP_DIR");
 }
