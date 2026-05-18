@@ -3,6 +3,7 @@ name = "qmap-rs"
 version = "0.1.0"
 edition = "2021"
 description = "Rust bindings for qmap"
+license = "BSD-2-Clause"
 repository = "https://github.com/quirinpa/qmap"
 
 [lib]
@@ -10,9 +11,6 @@ crate-type = ["rlib"]
 
 [dependencies]
 libc = { version = "0.2", default-features = false }
-
-[build-dependencies]
-bindgen = "0.69"
 
 [profile.release]
 lto = true

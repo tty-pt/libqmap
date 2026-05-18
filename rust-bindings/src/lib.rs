@@ -6,7 +6,8 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 use libc::{c_char, c_void};
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+mod bindings;
+pub use bindings::*;
 
 pub const QM_MISS: u32 = u32::MAX;
 
