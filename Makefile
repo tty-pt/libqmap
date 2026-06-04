@@ -1,7 +1,7 @@
 INSTALL_BIN := qmap
 all := libqmap qmap test test_extended test_multivalue test_record bench_multivalue
 
-LDLIBS-libqmap := -lxxhash -lqsys
+LDLIBS-libqmap := -lxxhash -lqsys -liconv
 LDLIBS-libqmap-Windows := -lmman
 install-dep-dlls-Windows := libmman.dll
 LDLIBS-bench_multivalue := -lqmap
