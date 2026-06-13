@@ -1444,8 +1444,9 @@ qmap_get(uint32_t hd, const void * const key)
       if (!struct_ptr)
         return NULL;
 
-      return (const char *)struct_ptr
-           + qmap_records[head->record_id].fields[fi].offset;
+      size_t field_offset = qmap_records[head->record_id].fields[fi].offset;
+      const char *result = (const char *)struct_ptr + field_offset;
+      return result;
     }
   }
 
@@ -1912,8 +1913,10 @@ qmap_next(const void ** ckey, const void ** cval,
     return 0;
 
   c = &qmap_cursors[cur_id];
-  *ckey = qmap_key(c->hd, sn);
-  *cval = qmap_val(c->hd, sn);
+  if (ckey)
+    *ckey = qmap_key(c->hd, sn);
+  if (cval)
+    *cval = qmap_val(c->hd, sn);
   return 1;
 }
 
@@ -2220,11 +2223,17 @@ qmap_field_put(uint32_t hd, const char *item_id,
 	        memcpy(id, p, cplen);
 	        id[cplen] = '\0';
 	        uint32_t pos = qmap_pos(thd, id);
+	        if (off > 0 && off < sizeof(resolved) - 1)
+	          resolved[off++] = '\n';
 	        if (pos != UINT32_MAX) {
-	          if (off > 0 && off < sizeof(resolved) - 1)
-	            resolved[off++] = '\n';
 	          off += (size_t)snprintf(resolved + off, sizeof(resolved) - off,
 	                                 "%u", pos);
+	        } else {
+	          size_t slen = strlen(id);
+	          if (slen > sizeof(resolved) - off - 1)
+	            slen = sizeof(resolved) - off - 1;
+	          memcpy(resolved + off, id, slen);
+	          off += slen;
 	        }
 	      }
 	      if (!nl) break;
