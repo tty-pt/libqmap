@@ -723,7 +723,7 @@ static void test_u32_field_put_via_ptr(void)
 
 typedef struct {
   char id[64];
-  uint32_t single;
+  char single[64];
   char multi[2048];
 } ref_source_t;
 
@@ -739,23 +739,22 @@ static void test_ref_field_get(void)
 
   qmap_record_field_t f[] = {
     { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
-    { "ref", QM_REFERENCE, offsetof(ref_source_t, single), sizeof(uint32_t) },
+    { "ref", QM_REFERENCE, offsetof(ref_source_t, single), sizeof(((ref_source_t*)0)->single) },
   };
   uint32_t rec = qmap_record_register("refget_src", sizeof(ref_source_t), f, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
                            TEST_MASK, QM_RECORD(rec));
   ASSERT(hd != QM_MISS, "map opened");
 
-  uint32_t v = 42;
-  qmap_put(hd, "x:ref", &v);
-  const uint32_t *got = qmap_get(hd, "x:ref");
-  ASSERT(got != NULL && *got == 42, "ref field value correct");
-  ASSERT(got != NULL && *got == 42, "ref returns uint32_t pointer");
+  qmap_put(hd, "x:ref", "target_id");
+  const char *got = qmap_get(hd, "x:ref");
+  ASSERT(got != NULL && strcmp(got, "target_id") == 0,
+         "ref field stores string");
 
-  v = 0;
-  qmap_put(hd, "x:ref", &v);
+  qmap_put(hd, "x:ref", "other_id");
   got = qmap_get(hd, "x:ref");
-  ASSERT(got != NULL && *got == 0, "ref=0 is zero");
+  ASSERT(got != NULL && strcmp(got, "other_id") == 0,
+         "ref field updates string");
 
   qmap_close(hd);
 }
@@ -804,7 +803,7 @@ static void test_single_ref_inverse(void)
       .name = "ref",
       .type = QM_REFERENCE,
       .offset = offsetof(ref_source_t, single),
-      .max_size = sizeof(uint32_t),
+      .max_size = sizeof(((ref_source_t*)0)->single),
       .target_record = trec,
       .inverse = NULL,
     },
@@ -816,36 +815,35 @@ static void test_single_ref_inverse(void)
   uint32_t shd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(srec),
                             TEST_MASK, QM_RECORD(srec));
   ASSERT(thd != QM_MISS && shd != QM_MISS, "maps opened");
+  qmap_record_field_set_target_hd(srec, "ref", thd);
 
   /* Put two target entries (positions 0 and 1) */
   ref_target_t ta = { .label = "A" }, tb = { .label = "B" };
   qmap_put(thd, "ta", &ta);
   qmap_put(thd, "tb", &tb);
 
-  /* Put source referencing target position 1 (tb) via whole struct */
-  ref_source_t s1;
-  memset(&s1, 0, sizeof(s1));
-  strcpy(s1.id, "src1");
-  s1.single = 1;
-  qmap_put(shd, "src1", &s1);
+  /* Put source referencing target "tb" via field-level puts
+   * (field-level path creates inverse entries on insert) */
+  qmap_put(shd, "src1:id", "src1");
+  qmap_put(shd, "src1:ref", "tb");
 
   /* Source position 0 (first entry in empty map) */
   uint32_t src_pos = 0;
 
-  /* Query inverse: which sources reference target position 1? */
+  /* Query inverse: which sources reference target position for "tb"? */
+  uint32_t tb_pos = qmap_pos(thd, "tb");
   uint32_t inv[16];
-  size_t ninv = qmap_inv_get(shd, "ref", 1, inv, 16);
+  size_t ninv = qmap_inv_get(shd, "ref", tb_pos, inv, 16);
   ASSERT(ninv >= 1, "inverse has at least 1 entry");
 
   int found_inv = 0;
   for (size_t i = 0; i < ninv; i++)
     if (inv[i] == src_pos) found_inv = 1;
-  ASSERT(found_inv, "source position 0 in inverse for target 1");
+  ASSERT(found_inv, "source position 0 in inverse for target tb");
 
-  /* Update ref to 0 (null) — inverse should be empty */
-  s1.single = 0;
-  qmap_put(shd, "src1", &s1);
-  ninv = qmap_inv_get(shd, "ref", 1, inv, 16);
+  /* Clear ref via field-level put — inverse should be cleaned */
+  qmap_put(shd, "src1:ref", "");
+  ninv = qmap_inv_get(shd, "ref", tb_pos, inv, 16);
   ASSERT(ninv == 0, "inverse empty after ref cleared");
 
   qmap_close(shd);
@@ -941,7 +939,7 @@ static void test_ref_field_del_cleanup(void)
       .name = "ref",
       .type = QM_REFERENCE,
       .offset = offsetof(ref_source_t, single),
-      .max_size = sizeof(uint32_t),
+      .max_size = sizeof(((ref_source_t*)0)->single),
       .target_record = trec,
       .inverse = NULL,
     },
@@ -961,14 +959,15 @@ static void test_ref_field_del_cleanup(void)
   uint32_t shd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(srec),
                             TEST_MASK, QM_RECORD(srec));
   ASSERT(thd != QM_MISS && shd != QM_MISS, "maps opened");
+  qmap_record_field_set_target_hd(srec, "ref", thd);
 
   ref_target_t t;
   qmap_put(thd, "tgt", &t);
+  uint32_t tgt_pos = qmap_pos(thd, "tgt");
 
-  /* Put source with single ref = 0 */
+  /* Put source with single ref = "tgt" */
   qmap_put(shd, "src:id", "src");
-  uint32_t rv = 0;
-  qmap_put(shd, "src:ref", &rv);
+  qmap_put(shd, "src:ref", "tgt");
 
   /* Put with multi-ref */
   qmap_put(shd, "src:m", "0");
@@ -977,7 +976,7 @@ static void test_ref_field_del_cleanup(void)
 
   /* Field-level delete of ref */
   qmap_del(shd, "src:ref");
-  size_t ni = qmap_inv_get(shd, "ref", 0, inv, 16);
+  size_t ni = qmap_inv_get(shd, "ref", tgt_pos, inv, 16);
   ASSERT(ni == 0, "ref inverse empty after field del");
 
   /* Field-level delete of multi_ref */
@@ -1006,7 +1005,7 @@ static void test_ref_whole_struct_del_cleanup(void)
       .name = "ref",
       .type = QM_REFERENCE,
       .offset = offsetof(ref_source_t, single),
-      .max_size = sizeof(uint32_t),
+      .max_size = sizeof(((ref_source_t*)0)->single),
       .target_record = trec,
       .inverse = NULL,
     },
@@ -1026,24 +1025,28 @@ static void test_ref_whole_struct_del_cleanup(void)
   uint32_t shd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(srec),
                             TEST_MASK, QM_RECORD(srec));
   ASSERT(thd != QM_MISS && shd != QM_MISS, "maps opened");
+  qmap_record_field_set_target_hd(srec, "ref", thd);
 
   ref_target_t t;
   qmap_put(thd, "tgt", &t);
+  uint32_t tgt_pos = qmap_pos(thd, "tgt");
 
-  ref_source_t s;
-  memset(&s, 0, sizeof(s));
-  strcpy(s.id, "src");
-  s.single = 0;
-  strcpy(s.multi, "0");
-  qmap_put(shd, "src", &s);
+  /* Create source via field-level puts (creates inverse entries) */
+  qmap_put(shd, "src:id", "src");
+  qmap_put(shd, "src:ref", "tgt");
+  qmap_put(shd, "src:m", "0");
 
   uint32_t inv[16];
+
+  /* Verify inverse was created */
+  size_t ni = qmap_inv_get(shd, "ref", tgt_pos, inv, 16);
+  ASSERT(ni >= 1, "ref inverse exists before del");
 
   /* Delete whole struct */
   qmap_del(shd, "src");
 
   /* Inverses should be cleaned */
-  size_t ni = qmap_inv_get(shd, "ref", 0, inv, 16);
+  ni = qmap_inv_get(shd, "ref", tgt_pos, inv, 16);
   ASSERT(ni == 0, "ref inverse empty after whole-struct del");
 
   ni = qmap_inv_get(shd, "m", 0, inv, 16);
@@ -1153,7 +1156,7 @@ static void test_qmap_inv_get_edge(void)
       .name = "ref",
       .type = QM_REFERENCE,
       .offset = offsetof(ref_source_t, single),
-      .max_size = sizeof(uint32_t),
+      .max_size = sizeof(((ref_source_t*)0)->single),
       .target_record = rec,
       .inverse = NULL,
     },
@@ -1164,6 +1167,7 @@ static void test_qmap_inv_get_edge(void)
                             TEST_MASK, QM_RECORD(rec));
   uint32_t shd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(srec),
                             TEST_MASK, QM_RECORD(srec));
+  qmap_record_field_set_target_hd(srec, "ref", thd);
 
   /* Empty map — no inverse */
   uint32_t inv[4];
@@ -1178,8 +1182,7 @@ static void test_qmap_inv_get_edge(void)
   /* max=0 */
   qmap_put(thd, "t", &(ref_target_t){ .label="t" });
   qmap_put(shd, "s:id", "s");
-  uint32_t rv = 0;
-  qmap_put(shd, "s:ref", &rv);
+  qmap_put(shd, "s:ref", "");
   n = qmap_inv_get(shd, "ref", 0, inv, 0);
   ASSERT(n == 0, "max=0 returns 0");
 
@@ -1196,17 +1199,17 @@ static void test_ref_null_behavior(void)
 
   qmap_record_field_t f[] = {
     { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
-    { "ref", QM_REFERENCE, offsetof(ref_source_t, single), sizeof(uint32_t) },
+    { "ref", QM_REFERENCE, offsetof(ref_source_t, single), sizeof(((ref_source_t*)0)->single) },
   };
   uint32_t rec = qmap_record_register("nulltest", sizeof(ref_source_t), f, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
                            TEST_MASK, QM_RECORD(rec));
   ASSERT(hd != QM_MISS, "map opened");
 
-  /* Create struct via id field put — ref starts at 0 (null) */
+  /* Create struct via id field put — ref starts at empty string */
   qmap_put(hd, "x:id", "x");
   const char *got = qmap_get(hd, "x:ref");
-  ASSERT(got != NULL && got[0] == '\0', "initial ref=0 is empty string");
+  ASSERT(got != NULL && got[0] == '\0', "initial ref is empty string");
 
   qmap_close(hd);
 }

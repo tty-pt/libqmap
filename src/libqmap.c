@@ -996,9 +996,15 @@ static void clean_inverses_for_pos(qmap_head_t *head, uint32_t pos)
     size_t  fm = rec->fields[fi].max_size;
 
     if (ft == QM_REFERENCE) {
-      uint32_t tp = *(const uint32_t *)((const char *)struct_ptr + fo);
-      if (tp > 0)
-        inverse_remove(head, (int)fi, tp, pos);
+      const char *id = (const char *)struct_ptr + fo;
+      if (id && id[0]) {
+        uint32_t target_hd = rec->fields[fi].target_hd;
+        if (target_hd > 0) {
+          uint32_t tp = qmap_pos(target_hd, id);
+          if (tp != UINT32_MAX)
+            inverse_remove(head, (int)fi, tp, pos);
+        }
+      }
     } else if (ft == QM_MULTI_REFERENCE && fm > 0) {
       const char *s = (const char *)struct_ptr + fo;
       while (*s) {
@@ -1050,10 +1056,17 @@ static void handle_inverse_put(qmap_head_t *head, int fi,
   size_t n_old = 0, n_new = 0;
 
   if (ft == QM_REFERENCE) {
-    uint32_t v = *(const uint32_t *)new_val;
-    if (v > 0) new_pos[n_new++] = v;
-    v = *(const uint32_t *)old_val;
-    if (v > 0) old_pos[n_old++] = v;
+    uint32_t target_hd = rec->fields[fi].target_hd;
+    const char *id = (const char *)new_val;
+    if (id && id[0] && target_hd > 0) {
+      uint32_t p = qmap_pos(target_hd, id);
+      if (p != UINT32_MAX) new_pos[n_new++] = p;
+    }
+    id = (const char *)old_val;
+    if (id && id[0] && target_hd > 0) {
+      uint32_t p = qmap_pos(target_hd, id);
+      if (p != UINT32_MAX) old_pos[n_old++] = p;
+    }
   } else if (ft == QM_MULTI_REFERENCE) {
     n_new = parse_positions((const char *)new_val, new_pos, 2048);
     n_old = parse_positions((const char *)old_val, old_pos, 2048);
@@ -1287,7 +1300,7 @@ qmap_put(uint32_t hd, const void * const key,
       }
 
       /* Save old field value for inverse diff */
-      size_t old_sz = (ft == QM_STR || ft == QM_MULTI_REFERENCE) ? fm : sizeof(uint32_t);
+      size_t old_sz = (ft == QM_STR || ft == QM_REFERENCE || ft == QM_MULTI_REFERENCE) ? fm : sizeof(uint32_t);
       uint8_t old_val_stack[8192];
       uint8_t *old_val = NULL;
       if (head->inv_hds) {
@@ -1301,6 +1314,9 @@ qmap_put(uint32_t hd, const void * const key,
       }
 
       if (ft == QM_STR && fm > 0) {
+        strncpy((char *)struct_ptr + fo, (const char *)value, fm - 1);
+        *((char *)struct_ptr + fo + fm - 1) = '\0';
+      } else if (ft == QM_REFERENCE && fm > 0) {
         strncpy((char *)struct_ptr + fo, (const char *)value, fm - 1);
         *((char *)struct_ptr + fo + fm - 1) = '\0';
       } else if (ft == QM_MULTI_REFERENCE && fm > 0) {
@@ -1664,7 +1680,7 @@ qmap_del(uint32_t hd, const void * const key)
 
       /* Snapshot old value for inverse cleanup */
       uint8_t old_val[8192];
-      size_t old_sz = (ft == QM_STR || ft == QM_MULTI_REFERENCE) ? fm : sizeof(uint32_t);
+      size_t old_sz = (ft == QM_STR || ft == QM_REFERENCE || ft == QM_MULTI_REFERENCE) ? fm : sizeof(uint32_t);
       if (old_sz > sizeof(old_val)) return;
       memcpy(old_val, (char *)struct_ptr + fo, old_sz);
 
@@ -1678,8 +1694,7 @@ qmap_del(uint32_t hd, const void * const key)
       /* Clean inverse: old references removed (new value is zeroed) */
       if (head->inv_hds && (ft == QM_REFERENCE || ft == QM_MULTI_REFERENCE)) {
         handle_inverse_put(head, fi, source_pos, old_val,
-                           (ft == QM_REFERENCE) ? (const void*)&(uint32_t){0}
-                                                : (const void*)"",
+                           (const void*)"",
                            ft, fm);
       }
       return;
@@ -2202,9 +2217,14 @@ qmap_field_put(uint32_t hd, const char *item_id,
 
   if (ft == QM_REFERENCE) {
     uint32_t thd = qmap_records[head->record_id].fields[fi].target_hd;
-    uint32_t pos = thd ? qmap_pos(thd, value) : 0;
-    if (pos == UINT32_MAX) pos = 0;
-    return qmap_put(hd, key, &pos);
+    if (thd == 0)
+      return QM_MISS;
+    if (!value || ((const char *)value)[0] == '\0')
+      return QM_MISS;
+    uint32_t pos = qmap_pos(thd, value);
+    if (pos == UINT32_MAX)
+      return QM_MISS;
+    return qmap_put(hd, key, value);
   }
 
 	if (ft == QM_MULTI_REFERENCE) {
@@ -2261,13 +2281,10 @@ qmap_field_get(uint32_t hd, const char *item_id,
   snprintf(key, sizeof(key), "%s:%s", item_id, field_name);
 
   if (ft == QM_REFERENCE) {
-    const uint32_t *pos_ptr = qmap_get(hd, key);
-    if (!pos_ptr) return NULL;
-    uint32_t pos = *pos_ptr;
-    if (pos == 0 || pos == UINT32_MAX) return NULL;
-    uint32_t thd = qmap_records[head->record_id].fields[fi].target_hd;
-    if (thd == 0) return NULL;
-    return qmap_get_key(thd, pos);
+    const char *stored = qmap_get(hd, key);
+    if (!stored || stored[0] == '\0')
+      return NULL;
+    return stored;
   }
 
   return qmap_get(hd, key);
