@@ -147,15 +147,6 @@ static void extract_dept(const void **skey, const void *pkey, const void *value,
 	*skey = &dept;
 }
 
-static void extract_year(const void **skey, const void *pkey, const void *value, void *userdata)
-{
-	(void)pkey;
-	const employee_t *emp = value;
-	static uint32_t year;
-	year = emp->hire_year;
-	*skey = &year;
-}
-
 /* Test 4: The critical README scenario - intervals with duplicate max times */
 static void test_multivalue_intervals(void)
 {
@@ -405,10 +396,10 @@ static void test_multivalue_large_scale(void)
 	for (int i = 0; i < COUNT; i++) {
 		qmap_put(hd, &key, &(uint32_t){i});
 	}
-	
 	/* Verify count */
-	assert(qmap_count(hd, &key) == COUNT);
+	assert(qmap_count(hd, &key) == (uint32_t)COUNT);
 	
+
 	/* Verify all accessible via iteration */
 	uint32_t cur = qmap_get_multi(hd, &key);
 	assert(cur != QM_MISS);
@@ -417,7 +408,7 @@ static void test_multivalue_large_scale(void)
 	const void *k, *v;
 	while (qmap_next(&k, &v, cur)) {
 		const uint32_t *val = v;
-		assert(*val >= 0 && *val < COUNT);
+		assert(*val < (uint32_t)COUNT);
 		count++;
 	}
 	qmap_fin(cur);
@@ -480,7 +471,7 @@ static void test_multivalue_idm_tracking(void)
 	int found[10] = {0};
 	while (qmap_next(&k, &v, cur)) {
 		const struct interval *iv = v;
-		assert(iv->who >= 0 && iv->who < 10);
+		assert(iv->who < 10);
 		found[iv->who] = 1;
 	}
 	qmap_fin(cur);
@@ -504,15 +495,15 @@ static void test_multivalue_persistence(void)
 	const int NUM_KEYS = 10;
 	const int DUPS_PER_KEY = 10;
 	
-	for (uint32_t k = 1; k <= NUM_KEYS; k++) {
-		for (uint32_t v = 1; v <= DUPS_PER_KEY; v++) {
+	for (int k = 1; k <= NUM_KEYS; k++) {
+		for (int v = 1; v <= DUPS_PER_KEY; v++) {
 			qmap_put(hd, &k, &(uint32_t){k * 100 + v});
 		}
 	}
 	
 	/* Verify all keys have correct counts */
-	for (uint32_t k = 1; k <= NUM_KEYS; k++) {
-		assert(qmap_count(hd, &k) == DUPS_PER_KEY);
+	for (int k = 1; k <= NUM_KEYS; k++) {
+		assert(qmap_count(hd, &k) == (uint32_t)DUPS_PER_KEY);
 	}
 	
 	/* Verify total entries */

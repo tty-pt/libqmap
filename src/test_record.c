@@ -26,9 +26,9 @@ static void test_record_register(void)
   printf("=== Record registration basic ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  },
-    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              },
-    { "email", QM_STR, offsetof(person_t, email), sizeof(((person_t*)0)->email) },
+    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  , 0, 0, NULL },
+    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              , 0, 0, NULL },
+    { "email", QM_STR, offsetof(person_t, email), sizeof(((person_t*)0)->email) , 0, 0, NULL },
   };
 
   uint32_t rec = qmap_record_register("person", sizeof(person_t), fields, 3);
@@ -49,10 +49,10 @@ static void test_multiple_records(void)
   typedef struct { uint32_t val; } b_t;
 
   qmap_record_field_t fa[] = {
-    { "label", QM_STR, offsetof(a_t, label), sizeof(((a_t*)0)->label) },
+    { "label", QM_STR, offsetof(a_t, label), sizeof(((a_t*)0)->label) , 0, 0, NULL },
   };
   qmap_record_field_t fb[] = {
-    { "val", QM_U32, offsetof(b_t, val), sizeof(uint32_t) },
+    { "val", QM_U32, offsetof(b_t, val), sizeof(uint32_t) , 0, 0, NULL },
   };
 
   uint32_t ra = qmap_record_register("atype", sizeof(a_t), fa, 1);
@@ -71,8 +71,8 @@ static void test_open_record_map(void)
   printf("=== Open record-aware map ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) },
-    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) },
+    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) , 0, 0, NULL },
+    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("open_test", sizeof(person_t), fields, 2);
   uint32_t vtype = qmap_record_type_id(rec);
@@ -86,7 +86,7 @@ static void test_open_record_map_invalid(void)
   printf("=== Open record-aware map with invalid params ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) },
+    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("open_test_inv", sizeof(person_t), fields, 1);
 
@@ -126,9 +126,9 @@ static void test_whole_struct_put_get(void)
   printf("=== Struct put and whole-struct get ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  },
-    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              },
-    { "email", QM_STR, offsetof(person_t, email), sizeof(((person_t*)0)->email) },
+    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  , 0, 0, NULL },
+    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              , 0, 0, NULL },
+    { "email", QM_STR, offsetof(person_t, email), sizeof(((person_t*)0)->email) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("person", sizeof(person_t), fields, 3);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -154,8 +154,8 @@ static void test_field_get_composite(void)
   printf("=== Field get via composite key ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  },
-    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              },
+    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  , 0, 0, NULL },
+    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("test_field_get", sizeof(person_t), fields, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -190,9 +190,9 @@ static void test_field_put_updates_struct(void)
   printf("=== Field put updates struct ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  },
-    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              },
-    { "email", QM_STR, offsetof(person_t, email), sizeof(((person_t*)0)->email) },
+    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  , 0, 0, NULL },
+    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              , 0, 0, NULL },
+    { "email", QM_STR, offsetof(person_t, email), sizeof(((person_t*)0)->email) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("test_field_put", sizeof(person_t), fields, 3);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -229,8 +229,8 @@ static void test_field_put_creates_struct(void)
   printf("=== Field put creates missing struct ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  },
-    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              },
+    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  , 0, 0, NULL },
+    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("test_create", sizeof(person_t), fields, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -265,8 +265,8 @@ static void test_field_put_overwrite(void)
   printf("=== Field put overwrites existing value ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) },
-    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) },
+    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) , 0, 0, NULL },
+    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("test_overwrite", sizeof(person_t), fields, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -300,8 +300,8 @@ static void test_delete_whole_struct(void)
   printf("=== Delete whole struct ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) },
-    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) },
+    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) , 0, 0, NULL },
+    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("test_del_whole", sizeof(person_t), fields, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -327,9 +327,9 @@ static void test_delete_field_zeros(void)
   printf("=== Delete single field zeros it ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  },
-    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              },
-    { "email", QM_STR, offsetof(person_t, email), sizeof(((person_t*)0)->email) },
+    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  , 0, 0, NULL },
+    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              , 0, 0, NULL },
+    { "email", QM_STR, offsetof(person_t, email), sizeof(((person_t*)0)->email) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("test_del_field", sizeof(person_t), fields, 3);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -372,7 +372,7 @@ static void test_string_truncation(void)
   } small_t;
 
   qmap_record_field_t fields[] = {
-    { "name", QM_STR, offsetof(small_t, name), sizeof(((small_t*)0)->name) },
+    { "name", QM_STR, offsetof(small_t, name), sizeof(((small_t*)0)->name) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("small", sizeof(small_t), fields, 1);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -400,8 +400,8 @@ static void test_overwrite_struct(void)
   printf("=== Overwrite struct at same key ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) },
-    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) },
+    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) , 0, 0, NULL },
+    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("test_overwrite2", sizeof(person_t), fields, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -448,8 +448,8 @@ static void test_assoc_record(void)
   printf("=== Association callbacks with record map ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) },
-    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) },
+    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) , 0, 0, NULL },
+    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("assoc_test", sizeof(person_t), fields, 2);
   uint32_t vtype = qmap_record_type_id(rec);
@@ -485,9 +485,9 @@ static void test_multiple_items_fields(void)
   printf("=== Multiple items, multiple fields ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  },
-    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              },
-    { "email", QM_STR, offsetof(person_t, email), sizeof(((person_t*)0)->email) },
+    { "name",  QM_STR, offsetof(person_t, name),  sizeof(((person_t*)0)->name)  , 0, 0, NULL },
+    { "age",   QM_U32, offsetof(person_t, age),   sizeof(uint32_t)              , 0, 0, NULL },
+    { "email", QM_STR, offsetof(person_t, email), sizeof(((person_t*)0)->email) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("multi_test", sizeof(person_t), fields, 3);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -575,7 +575,7 @@ static void test_pointer_stability_growth(void)
 
   /* Use tiny mask to force frequent growth */
   qmap_record_field_t fields[] = {
-    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) },
+    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("growth_test", sizeof(person_t), fields, 1);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -625,8 +625,8 @@ static void test_iteration(void)
   printf("=== Iteration over record-aware map ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) },
-    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) },
+    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) , 0, 0, NULL },
+    { "age",  QM_U32, offsetof(person_t, age),  sizeof(uint32_t) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("iter_test", sizeof(person_t), fields, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -659,10 +659,10 @@ static void test_same_type_multi_records(void)
   printf("=== Multiple records with same struct type ===\n");
 
   qmap_record_field_t fields_a[] = {
-    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) },
+    { "name", QM_STR, offsetof(person_t, name), sizeof(((person_t*)0)->name) , 0, 0, NULL },
   };
   qmap_record_field_t fields_b[] = {
-    { "age", QM_U32, offsetof(person_t, age), sizeof(uint32_t) },
+    { "age", QM_U32, offsetof(person_t, age), sizeof(uint32_t) , 0, 0, NULL },
   };
 
   uint32_t ra = qmap_record_register("ra", sizeof(person_t), fields_a, 1);
@@ -699,7 +699,7 @@ static void test_u32_field_put_via_ptr(void)
   printf("=== U32 field put via value pointer ===\n");
 
   qmap_record_field_t fields[] = {
-    { "count", QM_U32, offsetof(person_t, age), sizeof(uint32_t) },
+    { "count", QM_U32, offsetof(person_t, age), sizeof(uint32_t) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("u32test", sizeof(person_t), fields, 1);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -738,8 +738,8 @@ static void test_ref_field_get(void)
   printf("=== QM_REFERENCE field put and get ===\n");
 
   qmap_record_field_t f[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
-    { "ref", QM_REFERENCE, offsetof(ref_source_t, single), sizeof(((ref_source_t*)0)->single) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
+    { "ref", QM_REFERENCE, offsetof(ref_source_t, single), sizeof(((ref_source_t*)0)->single) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("refget_src", sizeof(ref_source_t), f, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -766,9 +766,9 @@ static void test_multi_ref_field_get(void)
   printf("=== QM_MULTI_REFERENCE field put and get ===\n");
 
   qmap_record_field_t f[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
     { "m", QM_MULTI_REFERENCE, offsetof(ref_source_t, multi),
-      sizeof(((ref_source_t*)0)->multi) },
+      sizeof(((ref_source_t*)0)->multi), 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("mrefget_src", sizeof(ref_source_t), f, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -793,12 +793,12 @@ static void test_single_ref_inverse(void)
   printf("=== Single reference inverse index ===\n");
 
   qmap_record_field_t tf[] = {
-    { "label", QM_STR, offsetof(ref_target_t, label), sizeof(((ref_target_t*)0)->label) },
+    { "label", QM_STR, offsetof(ref_target_t, label), sizeof(((ref_target_t*)0)->label) , 0, 0, NULL },
   };
   uint32_t trec = qmap_record_register("inv_tgt", sizeof(ref_target_t), tf, 1);
 
   qmap_record_field_t sf[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
         {
       .name = "ref",
       .type = QM_REFERENCE,
@@ -857,12 +857,12 @@ static void test_multi_ref_inverse(void)
   printf("=== Multi-reference inverse index ===\n");
 
   qmap_record_field_t tf[] = {
-    { "label", QM_STR, offsetof(ref_target_t, label), sizeof(((ref_target_t*)0)->label) },
+    { "label", QM_STR, offsetof(ref_target_t, label), sizeof(((ref_target_t*)0)->label) , 0, 0, NULL },
   };
   uint32_t trec = qmap_record_register("m_inv_tgt", sizeof(ref_target_t), tf, 1);
 
   qmap_record_field_t sf[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
         {
       .name = "m",
       .type = QM_MULTI_REFERENCE,
@@ -929,12 +929,12 @@ static void test_ref_field_del_cleanup(void)
   printf("=== Field-level delete cleans inverse ===\n");
 
   qmap_record_field_t tf[] = {
-    { "label", QM_STR, offsetof(ref_target_t, label), sizeof(((ref_target_t*)0)->label) },
+    { "label", QM_STR, offsetof(ref_target_t, label), sizeof(((ref_target_t*)0)->label) , 0, 0, NULL },
   };
   uint32_t trec = qmap_record_register("fdel_tgt", sizeof(ref_target_t), tf, 1);
 
   qmap_record_field_t sf[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
         {
       .name = "ref",
       .type = QM_REFERENCE,
@@ -995,12 +995,12 @@ static void test_ref_whole_struct_del_cleanup(void)
   printf("=== Whole-struct delete cleans inverse ===\n");
 
   qmap_record_field_t tf[] = {
-    { "label", QM_STR, offsetof(ref_target_t, label), sizeof(((ref_target_t*)0)->label) },
+    { "label", QM_STR, offsetof(ref_target_t, label), sizeof(((ref_target_t*)0)->label) , 0, 0, NULL },
   };
   uint32_t trec = qmap_record_register("wdel_tgt", sizeof(ref_target_t), tf, 1);
 
   qmap_record_field_t sf[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
         {
       .name = "ref",
       .type = QM_REFERENCE,
@@ -1066,7 +1066,7 @@ static void test_qmap_get_key_api(void)
   printf("=== qmap_get_key API ===\n");
 
   qmap_record_field_t f[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("keytest", sizeof(ref_source_t), f, 1);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -1098,7 +1098,7 @@ static void test_qmap_pos_api(void)
   printf("=== qmap_pos API ===\n");
 
   qmap_record_field_t f[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("postest", sizeof(ref_source_t), f, 1);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -1146,12 +1146,12 @@ static void test_qmap_inv_get_edge(void)
   printf("=== qmap_inv_get edge cases ===\n");
 
   qmap_record_field_t f[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("invedge", sizeof(ref_source_t), f, 1);
 
   qmap_record_field_t sf[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
         {
       .name = "ref",
       .type = QM_REFERENCE,
@@ -1198,8 +1198,8 @@ static void test_ref_null_behavior(void)
   printf("=== Reference null behavior ===\n");
 
   qmap_record_field_t f[] = {
-    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) },
-    { "ref", QM_REFERENCE, offsetof(ref_source_t, single), sizeof(((ref_source_t*)0)->single) },
+    { "id", QM_STR, offsetof(ref_source_t, id), sizeof(((ref_source_t*)0)->id) , 0, 0, NULL },
+    { "ref", QM_REFERENCE, offsetof(ref_source_t, single), sizeof(((ref_source_t*)0)->single) , 0, 0, NULL },
   };
   uint32_t rec = qmap_record_register("nulltest", sizeof(ref_source_t), f, 2);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
@@ -1226,9 +1226,9 @@ static void test_vstr_field(void)
   printf("=== QM_VSTR variable-length string field ===\n");
 
   qmap_record_field_t fields[] = {
-    { "name", QM_STR, offsetof(vstr_person_t, name), sizeof(((vstr_person_t*)0)->name) },
-    { "age",  QM_U32, offsetof(vstr_person_t, age),  sizeof(uint32_t) },
-    { "bio",  QM_VSTR, 0, 0 },  /* variable string, no inline storage */
+    { "name", QM_STR, offsetof(vstr_person_t, name), sizeof(((vstr_person_t*)0)->name) , 0, 0, NULL },
+    { "age",  QM_U32, offsetof(vstr_person_t, age),  sizeof(uint32_t) , 0, 0, NULL },
+    { "bio",  QM_VSTR, 0, 0 , 0, 0, NULL },  /* variable string, no inline storage */
   };
   uint32_t rec = qmap_record_register("vstr_test", sizeof(vstr_person_t), fields, 3);
   uint32_t hd = qmap_open(NULL, NULL, QM_STR, qmap_record_type_id(rec),
