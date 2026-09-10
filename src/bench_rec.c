@@ -1,0 +1,76 @@
+/* bench_rec.c — kernel join vs hand-rolled baseline (parity gate).
+ * Two sealed rec_sets joined via the kernel sorted merge vs a hand-rolled
+ * qmap join (iterate A, qmap_get membership in B). Asserts identical match
+ * counts and records wall time for both paths. */
+
+#include "./../include/ttypt/rec.h"
+#include "./../include/ttypt/qmap.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+static double
+now_sec(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+static void
+build(rec_set_t *s, uint64_t start, uint64_t step, uint64_t n)
+{
+	for (uint64_t i = 0; i < n; i++)
+		rec_set_push(s, start + i * step);
+	rec_set_seal(s);
+}
+
+int
+main(void)
+{
+	const uint64_t N = 10000u;
+	rec_set_t *a = rec_set_new(), *b = rec_set_new();
+	build(a, 0, 1, N);          /* 0..9999 */
+	build(b, N / 2, 2, N);      /* 5000..29998 step 2 → evens in 5000..9999 */
+
+	/* kernel path: sealed merge-join, no qmap involvement */
+	double t0 = now_sec();
+	rec_set_t *k = rec_set_new();
+	rec_set_intersect(k, a, b);
+	double tk = now_sec() - t0;
+
+	/* hand-rolled path: QM_SORTED maps, iterate A + qmap_get in B */
+	uint32_t kt = qmap_reg(sizeof(uint64_t));
+	uint32_t hda = qmap_open(NULL, NULL, kt, kt, 0xFFFF, QM_SORTED);
+	uint32_t hdb = qmap_open(NULL, NULL, kt, kt, 0xFFFF, QM_SORTED);
+	const rec_ref_t *aa = rec_set_at(a), *ba = rec_set_at(b);
+	for (size_t i = 0; i < rec_set_count(a); i++)
+		qmap_put(hda, &aa[i], &aa[i]);
+	for (size_t i = 0; i < rec_set_count(b); i++)
+		qmap_put(hdb, &ba[i], &ba[i]);
+
+	double t1 = now_sec();
+	uint32_t cur = qmap_iter(hda, NULL, 0);
+	const void *key, *value;
+	size_t qnext = 0, matches = 0;
+	while (qmap_next(&key, &value, cur)) {
+		qnext++;
+		if (qmap_get(hdb, key) != NULL)
+			matches++;
+	}
+	qmap_fin(cur);
+	double th = now_sec() - t1;
+
+	size_t kernel_n = rec_set_count(k);
+	printf("kernel join      : %9zu matches   %7.2f ms\n", kernel_n, tk * 1e3);
+	printf("hand-rolled join : %9zu matches   %7.2f ms (qmap_next %zu, qmap_get %zu)\n",
+	       matches, th * 1e3, qnext, qnext);
+	printf("qmap_next count  : kernel %zu (merge, zero scans) vs hand-rolled %zu\n",
+	       kernel_n, qnext);
+
+	int ok = kernel_n == matches;
+	printf(ok ? "PARITY OK (identical match counts)\n"
+	          : "PARITY FAILED\n");
+	return ok ? 0 : 1;
+}

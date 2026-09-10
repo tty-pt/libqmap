@@ -830,6 +830,12 @@ qmap_get_vtype(uint32_t hd)
   return qmap_heads[hd].types[QM_VALUE];
 }
 
+  uint32_t /* API */
+qmap_get_ktype(uint32_t hd)
+{
+  return qmap_heads[hd].types[QM_KEY];
+}
+
   size_t /* API */
 qmap_type_len(uint32_t type_id)
 {

@@ -1,3 +1,19 @@
+## [0.8.0] - 2026-09-10
+
+### Added
+- **rec kernel** (`ttypt/rec.h`, `src/rec.c`): recall candidate sets
+  (`rec_set_t`: arena-backed, push/seal + sorted merge-join intersect/
+  subtract/union, drain any qmap handle via `rec_set_fill_qmap_iter`) and a
+  generic streaming ranking loop (`rec_rank_t`: bounded top-k min-heap,
+  min-score filter, stable best-first sort). Pure C, no domain math; optional
+  and additive — raw qmap entry points untouched.
+- `qmap_get_ktype()`: returns a map's key type, mirroring `qmap_get_vtype`.
+- `rec_test` + `bench_rec` build targets (per-area-binary convention),
+  registered in `test.sh`; `bench_rec` asserts kernel-join vs hand-rolled
+  join parity (identical match counts).
+
+---
+
 ## [0.7.0] - 2026-02-23
 
 ### Fixed

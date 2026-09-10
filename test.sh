@@ -21,6 +21,7 @@ rm *.db 2>/dev/null || true
 ./bin/test_extended
 ./bin/test_multivalue
 ./bin/test_record
+./bin/rec_test
 
 adb=a.db:a:u
 bdb=b.db:a

@@ -222,6 +222,11 @@ uint32_t qmap_open(const char *filename,
 uint32_t qmap_get_vtype(uint32_t hd);
 
 /**
+ * @brief Returns the key type (ktype) of a map.
+ */
+uint32_t qmap_get_ktype(uint32_t hd);
+
+/**
  * @brief Returns the fixed length of a type, or 0 if variable.
  */
 size_t qmap_type_len(uint32_t type_id);
