@@ -702,21 +702,29 @@ qmap_rebuild_map(uint32_t hd)
   memset(qmap->map, 0xFF,
       sizeof(uint32_t) * head->m);
 
-  /* For QM_MULTIVALUE maps, duplicate chains must be re-linked so the
-   * chain head equals the position stored in the hash slot (the first
-   * live position for the key, in position order). Chain head and slot
-   * entry diverge when positions are freed and reused out of insertion
-   * order. The map is freshly memset here (hole-free), so the early-exit
-   * qmap_id_hash probe re-discovers each key's single home slot: the first
-   * occurrence lands at first-empty-from-home and later duplicates converge
-   * on the head slot via key match. */
+  /* For QM_MULTIVALUE maps, duplicate chains live entirely in qmap->mv_next[]
+   * (per-key, in insertion order) and are NOT rebuilt here. The hash table
+   * must simply re-point each key's home slot at its chain head. Positions
+   * are stable across whole-key deletes and slot reclaims, so the existing
+   * chain order is authoritative; a position is a chain head iff no LIVE
+   * member links to it via mv_next. (Rebuilding chains by position order
+   * instead would scramble insertion order the moment a freed low slot is
+   * reclaimed by a later duplicate.) */
   int mv = (head->flags & QM_MULTIVALUE) != 0;
-  uint32_t *chain_prev = NULL;
+  uint32_t *has_pred = NULL;
   if (mv) {
-    chain_prev = malloc(sizeof(uint32_t) * head->m);
-    CBUG(!chain_prev, "malloc error (chain_prev)\n");
-    for (uint32_t i = 0; i < head->m; i++)
-      chain_prev[i] = QM_MISS;
+    has_pred = malloc(sizeof(uint32_t) * qmap->idm.last);
+    CBUG(!has_pred, "malloc error (has_pred)\n");
+    for (uint32_t i = 0; i < qmap->idm.last; i++)
+      has_pred[i] = 0;
+    /* Mark every live position that a live chain member links to. */
+    for (uint32_t n = 0; n < qmap->idm.last; n++) {
+      if (!qmap->omap[n])
+        continue;
+      uint32_t mvn = qmap->mv_next[n];
+      if (mvn != QM_MISS && mvn < qmap->idm.last && qmap->omap[mvn])
+        has_pred[mvn] = 1;
+    }
   }
 
   for (uint32_t n = 0; n < qmap->idm.last; n++) {
@@ -726,20 +734,15 @@ qmap_rebuild_map(uint32_t hd)
       continue;
 
     uint32_t id;
-    if (chain_prev) {
+    if (mv) {
       id = qmap_id_hash(hd, key, qmap->key_sizes[n],
                         qmap->key_hashes[n]);
       if (id == QM_MISS)
         continue;
-      if (chain_prev[id] != QM_MISS) {
-        /* duplicate: link after the previous live position */
-        qmap->mv_next[chain_prev[id]] = n;
-      } else {
-        /* head: first live position for this key */
+      /* Only a chain head (no live predecessor) gets the home slot; the
+       * chain itself is left untouched, so its order is preserved. */
+      if (!has_pred[n])
         qmap->map[id] = n;
-      }
-      chain_prev[id] = n;
-      qmap->mv_next[n] = QM_MISS;
     } else {
       id = qmap->key_hashes[n] & head->mask;
       while (qmap->map[id] != QM_MISS)
@@ -748,7 +751,7 @@ qmap_rebuild_map(uint32_t hd)
     }
   }
 
-  free(chain_prev);
+  free(has_pred);
 }
 
   static void
@@ -1896,8 +1899,10 @@ qmap_del_all(uint32_t hd, const void * const key)
     uint32_t *positions = malloc(sizeof(*positions) * cap);
     int fast_path = ids_iter(&qmap->linked) == NULL && head->phd == hd;
 
-    if (cur == QM_MISS)
+    if (cur == QM_MISS) {
+      free(positions);
       return;
+    }
 
     CBUG(!positions, "malloc error (del_all)\n");
 

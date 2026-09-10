@@ -1332,6 +1332,95 @@ static void test_backshift_wrap(void)
 	qmap_close(hd);
 }
 
+/* Chain order must survive fast-path del_all slot reclamation + rebuild.
+ * Bug: qmap_rebuild_map relinked duplicates by ascending position order; when
+ * a freed low slot is reclaimed by a later duplicate, get_multi/get order
+ * scrambled (insertion [1,2,3,4] became slot order [4,1,2,3]). */
+static void test_chain_order_slot_reuse(void)
+{
+	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF,
+	                        QM_MULTIVALUE | QM_SORTED);
+	assert(hd != QM_MISS);
+
+	uint32_t a = 100, b = 200, c = 300;
+	uint32_t vals[4];
+	int i;
+	const void *k, *v;
+
+	/* B at the low slot so it frees a position below A's chain. */
+	qmap_put(hd, &b, &(uint32_t){9});
+	qmap_put(hd, &a, &(uint32_t){1});
+	qmap_put(hd, &a, &(uint32_t){2});
+	qmap_put(hd, &a, &(uint32_t){3});
+
+	/* Fast-path del_all punches slot 0 and idm_del frees it. */
+	qmap_del_all(hd, &b);
+	assert(qmap_count(hd, &a) == 3);
+
+	/* The newest duplicate of A reclaims the freed low slot. */
+	qmap_put(hd, &a, &(uint32_t){4});
+	assert(qmap_count(hd, &a) == 4);
+
+	/* Churn another key to force qmap_rebuild_map again. */
+	qmap_put(hd, &c, &(uint32_t){5});
+	qmap_del_all(hd, &c);
+
+	/* Insertion order must survive; get() returns the chain head. */
+	const uint32_t *first = qmap_get(hd, &a);
+	assert(first != NULL && *first == 1);
+
+	uint32_t cur = qmap_get_multi(hd, &a);
+	assert(cur != QM_MISS);
+	i = 0;
+	while (qmap_next(&k, &v, cur)) {
+		assert(i < 4);
+		vals[i++] = *(const uint32_t *)v;
+	}
+	assert(i == 4);
+	assert(vals[0] == 1 && vals[1] == 2 && vals[2] == 3 && vals[3] == 4);
+
+	qmap_close(hd);
+}
+
+/* Same invariant across qmap_grow: growth relinks the hash table while a
+ * hole exists and a duplicate chain has already been slot-scrambled. */
+static void test_chain_order_grow_with_holes(void)
+{
+	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 0x07,
+	                        QM_MULTIVALUE | QM_SORTED);
+	assert(hd != QM_MISS);
+
+	uint32_t a = 100, b = 200, c = 300, d = 400;
+	uint32_t vals[4];
+	int i;
+	const void *k, *v;
+
+	qmap_put(hd, &b, &(uint32_t){9});   /* pos 0 — will be freed */
+	qmap_put(hd, &a, &(uint32_t){1});
+	qmap_put(hd, &a, &(uint32_t){2});
+	qmap_put(hd, &a, &(uint32_t){3});
+
+	qmap_del_all(hd, &b);               /* punch pos 0, rebuild map */
+	qmap_put(hd, &a, &(uint32_t){4});   /* reclaims pos 0 */
+	qmap_put(hd, &c, &(uint32_t){5});   /* still under grow threshold */
+	qmap_put(hd, &d, &(uint32_t){6});   /* n+1=6 -> 24>=m*3 -> grow */
+
+	const uint32_t *first = qmap_get(hd, &a);
+	assert(first != NULL && *first == 1);
+
+	uint32_t cur = qmap_get_multi(hd, &a);
+	assert(cur != QM_MISS);
+	i = 0;
+	while (qmap_next(&k, &v, cur)) {
+		assert(i < 4);
+		vals[i++] = *(const uint32_t *)v;
+	}
+	assert(i == 4);
+	assert(vals[0] == 1 && vals[1] == 2 && vals[2] == 3 && vals[3] == 4);
+
+	qmap_close(hd);
+}
+
 int main(void)
 {
 	printf("=== QM_MULTIVALUE Test Suite ===\n\n");
@@ -1361,6 +1450,8 @@ int main(void)
 	TEST(test_chain_persist);
 	TEST(test_backshift_cluster);
 	TEST(test_backshift_wrap);
+	TEST(test_chain_order_slot_reuse);
+	TEST(test_chain_order_grow_with_holes);
 	
 	printf("\n=== All tests passed! ===\n");
 	return 0;
