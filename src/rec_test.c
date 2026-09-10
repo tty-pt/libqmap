@@ -334,6 +334,120 @@ test_rank_streaming_sequence(void)
 	rec_rank_free(rk);
 }
 
+/* ── 1C: approximate-fill exactness flag ────────────────────────────── */
+
+static void
+test_exactness_defaults(void)
+{
+	printf("=== 1C exactness defaults ===\n");
+	rec_set_t *s = rec_set_new();
+	ASSERT(s, "new set");
+	ASSERT(rec_set_approx(s) == REC_SET_EXACT, "fresh set is exact");
+	ASSERT(rec_set_recall_bound(s) == 1.0f, "fresh set bound 1.0");
+	rec_set_push(s, 1);
+	ASSERT(rec_set_approx(s) == REC_SET_EXACT, "push keeps exact");
+	rec_set_seal(s);
+	ASSERT(rec_set_approx(s) == REC_SET_EXACT, "seal keeps exact");
+	rec_set_free(s);
+}
+
+static void
+test_exactness_set_clear(void)
+{
+	printf("=== 1C exactness set/clear ===\n");
+	rec_set_t *s = rec_set_new();
+	ASSERT(rec_set_set_approx(s, REC_SET_APPROX, 0.9f) == 0, "set approx ok");
+	ASSERT(rec_set_approx(s) == REC_SET_APPROX, "now approximate");
+	ASSERT(rec_set_recall_bound(s) == 0.9f, "bound stored");
+	ASSERT(rec_set_set_approx(s, REC_SET_EXACT, 1.0f) == 0, "set exact ok");
+	ASSERT(rec_set_approx(s) == REC_SET_EXACT, "back to exact");
+	ASSERT(rec_set_recall_bound(s) == 1.0f, "bound reset to 1.0");
+	rec_set_free(s);
+}
+
+static void
+test_exactness_bound_validation(void)
+{
+	printf("=== 1C exactness bound validation ===\n");
+	rec_set_t *s = rec_set_new();
+	ASSERT(rec_set_set_approx(s, REC_SET_APPROX, 0.0f) == -1, "bound 0 rejected");
+	ASSERT(rec_set_set_approx(s, REC_SET_APPROX, -1.0f) == -1, "bound <0 rejected");
+	ASSERT(rec_set_set_approx(s, REC_SET_APPROX, 1.5f) == -1, "bound >1 rejected");
+	ASSERT(rec_set_approx(s) == REC_SET_EXACT, "rejected leaves exact");
+	ASSERT(rec_set_set_approx(s, REC_SET_APPROX, 1.0f) == 0, "bound 1.0 accepted");
+	ASSERT(rec_set_approx(s) == REC_SET_APPROX, "approx accepted");
+	rec_set_free(s);
+	ASSERT(rec_set_set_approx(NULL, REC_SET_APPROX, 0.5f) == -1, "NULL rejected");
+}
+
+static void
+test_intersect_propagates_approx(void)
+{
+	printf("=== 1C intersect propagates approx ===\n");
+	rec_set_t *a = rec_set_new(), *b = rec_set_new(), *d = rec_set_new();
+	const rec_ref_t av[] = { 1, 2, 3, 4, 5 }, bv[] = { 2, 4, 6 };
+	fill(a, av, 5); fill(b, bv, 3);
+
+	rec_set_set_approx(b, REC_SET_APPROX, 0.8f);
+	rec_set_intersect(d, a, b);
+	EXPECT_SET(d, 2, 4);
+	ASSERT(rec_set_approx(d) == REC_SET_APPROX, "exact∩approx → approx");
+	ASSERT(rec_set_recall_bound(d) == 0.8f, "bound = min(1.0, 0.8)");
+
+	rec_set_set_approx(a, REC_SET_APPROX, 0.5f);
+	rec_set_intersect(d, a, b);
+	ASSERT(rec_set_approx(d) == REC_SET_APPROX, "approx∩approx → approx");
+	ASSERT(rec_set_recall_bound(d) == 0.5f, "bound = min(0.5, 0.8)");
+	rec_set_free(d);
+
+	d = rec_set_new();
+	rec_set_set_approx(d, REC_SET_APPROX, 0.9f); /* dst old flag discarded */
+	rec_set_intersect(d, a, b);
+	ASSERT(rec_set_approx(d) == REC_SET_APPROX &&
+	       rec_set_recall_bound(d) == 0.5f, "dst overwritten, bound min");
+	rec_set_free(d);
+
+	rec_set_free(a); rec_set_free(b);
+}
+
+static void
+test_union_propagates_approx(void)
+{
+	printf("=== 1C union propagates approx ===\n");
+	rec_set_t *a = rec_set_new(), *b = rec_set_new(), *d = rec_set_new();
+	fill(a, (rec_ref_t[]){ 1, 2 }, 2);
+	fill(b, (rec_ref_t[]){ 2, 3 }, 2);
+	rec_set_union(d, a, b);
+	ASSERT(rec_set_approx(d) == REC_SET_EXACT, "exact∪exact → exact");
+
+	rec_set_set_approx(b, REC_SET_APPROX, 0.7f);
+	rec_set_union(d, a, b);
+	ASSERT(rec_set_approx(d) == REC_SET_APPROX, "exact∪approx → approx");
+	ASSERT(rec_set_recall_bound(d) == 0.7f, "bound = min");
+	rec_set_free(a); rec_set_free(b); rec_set_free(d);
+}
+
+static void
+test_subtract_keeps_left_flag(void)
+{
+	printf("=== 1C subtract keeps left operand's exactness ===\n");
+	rec_set_t *a = rec_set_new(), *b = rec_set_new(), *d = rec_set_new();
+	fill(a, (rec_ref_t[]){ 1, 2, 3 }, 3);
+	fill(b, (rec_ref_t[]){ 2 }, 1);
+
+	rec_set_set_approx(a, REC_SET_APPROX, 0.6f);
+	rec_set_subtract(d, a, b);
+	EXPECT_SET(d, 1, 3);
+	ASSERT(rec_set_approx(d) == REC_SET_APPROX, "keeps a's approx");
+	ASSERT(rec_set_recall_bound(d) == 0.6f, "keeps a's bound");
+
+	rec_set_set_approx(a, REC_SET_EXACT, 1.0f);
+	rec_set_set_approx(b, REC_SET_APPROX, 0.3f);
+	rec_set_subtract(d, a, b);
+	ASSERT(rec_set_approx(d) == REC_SET_EXACT, "exact−approx → exact (subset of a)");
+	rec_set_free(a); rec_set_free(b); rec_set_free(d);
+}
+
 int
 main(void)
 {
@@ -356,6 +470,13 @@ main(void)
 	test_rank_ties();
 	test_rank_edge();
 	test_rank_streaming_sequence();
+
+	test_exactness_defaults();
+	test_exactness_set_clear();
+	test_exactness_bound_validation();
+	test_intersect_propagates_approx();
+	test_union_propagates_approx();
+	test_subtract_keeps_left_flag();
 
 	printf("\n");
 	if (errors == 0)

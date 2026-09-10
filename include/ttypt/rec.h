@@ -75,6 +75,28 @@ const rec_ref_t *rec_set_at(const rec_set_t *s);
 /** Release the set's storage. */
 void rec_set_free(rec_set_t *s);
 
+/** Exactness of a filled set. Approximate fills (e.g. ANN neighbors) must
+ *  declare themselves: intersecting with an approximate set bounds final
+ *  recall by the approximate one. Default for every set: exact, bound 1.0. */
+enum rec_set_exactness {
+	REC_SET_EXACT = 0, /**< every matching ref is reported */
+	REC_SET_APPROX = 1 /**< bounded candidate window m; owed recall@k < 1 */
+};
+
+/** Mark the set approximate/exact and its owed recall@k bound (0 < bound
+ *  <= 1). Exact sets carry bound 1.0. Returns 0 on success, -1 when the
+ *  set is NULL or the bound is outside (0,1] (the flag is left unchanged).
+ *  Joins propagate exactness: intersect/union produce an approximate set
+ *  when either operand is (bound = min); subtract keeps the left operand's
+ *  flag and bound (the result is a subset of it). */
+int rec_set_set_approx(rec_set_t *s, int approx, float recall_bound);
+
+/** 1 if the set is approximate (REC_SET_APPROX), 0 if exact (default). */
+int rec_set_approx(const rec_set_t *s);
+
+/** Owed recall@k bound (default 1.0 for exact sets). */
+float rec_set_recall_bound(const rec_set_t *s);
+
 /** @} */
 
 /** @defgroup rec_rank Ranking loop

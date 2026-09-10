@@ -13,6 +13,8 @@ struct rec_set {
 	rec_ref_t *a;
 	size_t n, cap;
 	int sealed;
+	int approx;         /* REC_SET_EXACT / REC_SET_APPROX */
+	float recall_bound; /* owed recall@k (exact → 1.0) */
 };
 
 struct rec_rank {
@@ -53,6 +55,8 @@ rec_set_new(void)
 		free(s);
 		return NULL;
 	}
+	s->approx = REC_SET_EXACT;
+	s->recall_bound = 1.0f;
 	return s;
 }
 
@@ -107,6 +111,16 @@ check_sealed(const rec_set_t *a, const rec_set_t *b)
 	return a->sealed && b->sealed ? 0 : -1;
 }
 
+static void
+join_exactness(rec_set_t *dst, const rec_set_t *a, const rec_set_t *b)
+{
+	/* intersect/union: result approximates as soon as either operand does;
+	 * owed recall is bounded by the weaker (min) operand. */
+	dst->approx = (a->approx || b->approx) ? REC_SET_APPROX : REC_SET_EXACT;
+	dst->recall_bound = a->recall_bound < b->recall_bound
+		? a->recall_bound : b->recall_bound;
+}
+
 int
 rec_set_intersect(rec_set_t *dst, const rec_set_t *a, const rec_set_t *b)
 {
@@ -127,6 +141,7 @@ rec_set_intersect(rec_set_t *dst, const rec_set_t *a, const rec_set_t *b)
 		}
 	}
 	dst->sealed = 1;
+	join_exactness(dst, a, b);
 	return 0;
 }
 
@@ -147,6 +162,8 @@ rec_set_subtract(rec_set_t *dst, const rec_set_t *a, const rec_set_t *b)
 			rec_set_push(dst, a->a[i++]);
 	}
 	dst->sealed = 1;
+	dst->approx = a->approx;       /* result ⊆ a: keeps a's exactness */
+	dst->recall_bound = a->recall_bound;
 	return 0;
 }
 
@@ -169,6 +186,7 @@ rec_set_union(rec_set_t *dst, const rec_set_t *a, const rec_set_t *b)
 		}
 	}
 	dst->sealed = 1;
+	join_exactness(dst, a, b);
 	return 0;
 }
 
@@ -182,6 +200,32 @@ const rec_ref_t *
 rec_set_at(const rec_set_t *s)
 {
 	return s->a;
+}
+
+int
+rec_set_set_approx(rec_set_t *s, int approx, float recall_bound)
+{
+	if (!s)
+		return -1;
+	if (approx != REC_SET_EXACT && approx != REC_SET_APPROX)
+		return -1;
+	if (recall_bound <= 0.0f || recall_bound > 1.0f)
+		return -1;
+	s->approx = approx;
+	s->recall_bound = recall_bound;
+	return 0;
+}
+
+int
+rec_set_approx(const rec_set_t *s)
+{
+	return s ? s->approx : REC_SET_EXACT;
+}
+
+float
+rec_set_recall_bound(const rec_set_t *s)
+{
+	return s ? s->recall_bound : 1.0f;
 }
 
 void
