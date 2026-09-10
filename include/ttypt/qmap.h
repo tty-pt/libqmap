@@ -152,6 +152,15 @@ enum qmap_if {
    *    hash table, comparing keys with the initial key using
    *    the type's comparison function */
   QM_RANGE = 1,
+
+  /** Lower-bound range: with QM_RANGE on a QM_SORTED map, start
+   *  iteration at the first key >= the starting key and continue to
+   *  the end (all entries in ascending key order, duplicates included).
+   *  Unlike plain QM_RANGE, this applies to QM_MULTIVALUE maps too
+   *  (plain QM_RANGE on a MULTIVALUE map iterates only the duplicates
+   *  of the one exact starting key). Requires QM_SORTED; on unsorted
+   *  maps it degrades to a full linear scan. */
+  QM_RANGE_GE = 2,
 };
 
 /** @} */

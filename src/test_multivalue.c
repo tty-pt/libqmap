@@ -904,6 +904,121 @@ static void test_bug3_range_returns_all_duplicates(void)
 	qmap_close(hd);
 }
 
+/* Test 19: QM_RANGE_GE - lower-bound range iteration on QM_MULTIVALUE maps.
+ * Plain QM_RANGE on a MULTIVALUE map iterates only the duplicates of the
+ * one exact starting key. QM_RANGE_GE starts at the first key >= the
+ * starting key and iterates to the end (all duplicates included, ascending).
+ */
+static void test_range_ge(void)
+{
+	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF,
+	                        QM_SORTED | QM_MULTIVALUE);
+	assert(hd != QM_MISS);
+
+	uint32_t keys[] = {1, 2, 2, 3, 5, 5, 5};
+	for (uint32_t i = 0; i < sizeof(keys)/sizeof(keys[0]); i++) {
+		qmap_put(hd, &keys[i], &i);
+	}
+
+	/* GE from a key present with duplicates: boundary key included */
+	uint32_t start = 3;
+	uint32_t cur = qmap_iter(hd, &start, QM_RANGE | QM_RANGE_GE);
+	assert(cur != QM_MISS);
+	const void *k, *v;
+	uint32_t expect[] = {3, 5, 5, 5};
+	uint32_t n = 0, prev = 0;
+	while (qmap_next(&k, &v, cur)) {
+		const uint32_t *kk = k;
+		assert(*kk >= start);              /* no entries below the bound */
+		if (n > 0) assert(*kk >= prev);    /* ascending, or equal (dup) */
+		assert(*kk == expect[n]);
+		prev = *kk;
+		n++;
+	}
+	assert(n == 4);
+
+	/* GE from a mid-key not present: first key >= it */
+	start = 4;
+	cur = qmap_iter(hd, &start, QM_RANGE | QM_RANGE_GE);
+	n = 0;
+	while (qmap_next(&k, &v, cur)) {
+		assert(*(const uint32_t *)k == 5);
+		n++;
+	}
+	assert(n == 3);
+
+	/* GE from below the lowest key: everything */
+	start = 0;
+	cur = qmap_iter(hd, &start, QM_RANGE | QM_RANGE_GE);
+	n = 0;
+	while (qmap_next(&k, &v, cur)) n++;
+	assert(n == 7);
+
+	/* GE from above the highest key: nothing */
+	start = 6;
+	cur = qmap_iter(hd, &start, QM_RANGE | QM_RANGE_GE);
+	n = 0;
+	while (qmap_next(&k, &v, cur)) n++;
+	assert(n == 0);
+
+	/* Dirty index: writes after an iteration, then GE again (must rebuild) */
+	for (uint32_t i = 0; i < 3; i++) {
+		qmap_put(hd, &keys[0], &i);      /* more duplicate key-1 entries */
+	}
+	start = 1;
+	cur = qmap_iter(hd, &start, QM_RANGE | QM_RANGE_GE);
+	n = 0;
+	while (qmap_next(&k, &v, cur)) n++;
+	assert(n == 10);                       /* 4 now at key 1, +2,2,3,5,5,5 */
+
+	qmap_close(hd);
+
+	/* Empty multivalue map */
+	hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, QM_SORTED | QM_MULTIVALUE);
+	assert(hd != QM_MISS);
+	start = 100;
+	cur = qmap_iter(hd, &start, QM_RANGE | QM_RANGE_GE);
+	assert(cur != QM_MISS);
+	n = 0;
+	while (qmap_next(&k, &v, cur)) n++;
+	assert(n == 0);
+	qmap_close(hd);
+
+	/* Non-multivalue sorted map: GE matches plain QM_RANGE+QM_SORTED */
+	hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, QM_SORTED);
+	assert(hd != QM_MISS);
+	uint32_t nk[] = {10, 30, 50};
+	for (uint32_t i = 0; i < sizeof(nk)/sizeof(nk[0]); i++)
+		qmap_put(hd, &nk[i], &i);
+	start = 20;
+	cur = qmap_iter(hd, &start, QM_RANGE | QM_RANGE_GE);
+	n = 0;
+	while (qmap_next(&k, &v, cur)) {
+		assert(*(const uint32_t *)k == 30 || *(const uint32_t *)k == 50);
+		prev = *(const uint32_t *)k;
+		if (n == 0) assert(prev == 30);
+		n++;
+	}
+	assert(n == 2);
+	qmap_close(hd);
+
+	/* Unsorted map: GE degrades to a linear scan applying the same GE filter */
+	hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	assert(hd != QM_MISS);
+	uint32_t uk[] = {7, 2, 9, 1, 20};
+	for (uint32_t i = 0; i < sizeof(uk)/sizeof(uk[0]); i++)
+		qmap_put(hd, &uk[i], &i);
+	start = 5;
+	cur = qmap_iter(hd, &start, QM_RANGE | QM_RANGE_GE);
+	n = 0;
+	while (qmap_next(&k, &v, cur)) {
+		assert(*(const uint32_t *)k >= 5);
+		n++;
+	}
+	assert(n == 3);                        /* 7, 9, 20 */
+	qmap_close(hd);
+}
+
 int main(void)
 {
 	printf("=== QM_MULTIVALUE Test Suite ===\n\n");
@@ -926,6 +1041,7 @@ int main(void)
 	TEST(test_multivalue_range_iteration);
 	TEST(test_multivalue_stress);
 	TEST(test_bug3_range_returns_all_duplicates);
+	TEST(test_range_ge);
 	
 	printf("\n=== All tests passed! ===\n");
 	return 0;

@@ -1828,7 +1828,29 @@ qmap_iter(uint32_t hd, const void * const key, uint32_t flags)
   uint32_t cur_id = idm_new(&cursor_idm);
   qmap_cur_t *cursor = &qmap_cursors[cur_id];
 
-  if (key && (head->flags & QM_MULTIVALUE)) {
+  if (key && (flags & QM_RANGE_GE)) {
+    /* Lower-bound range: iterate every entry whose key >= the starting
+     * key (all duplicates included, ascending when QM_SORTED). This is
+     * the documented QM_RANGE+QM_SORTED behavior; it must also work for
+     * QM_MULTIVALUE maps, which plain QM_RANGE narrows to the single
+     * exact starting key. */
+    if (head->flags & QM_SORTED) {
+      /* Lower bound must be the FIRST occurrence of the starting key when
+       * it is present (qmap_bsearch_ANY could land on a middle duplicate
+       * of it), otherwise the insertion point — the first key above it. */
+      int exact;
+      int first = qmap_bsearch_ex(hd, key, &exact, QMAP_BSEARCH_FIRST);
+      cursor->pos = (exact)
+        ? (uint32_t) first
+        : (uint32_t) qmap_bsearch(hd, key, NULL);
+      cursor->end_pos = head->sorted_n;
+    } else {
+      /* Unsorted: fall back to the linear QM_RANGE scan below, which
+       * applies the same "key >= starting key" filter. */
+      cursor->pos = cursor->end_pos = 0;
+    }
+    flags |= QM_RANGE;
+  } else if (key && (head->flags & QM_MULTIVALUE)) {
     /* For QM_MULTIVALUE maps, use sorted iteration to find all duplicates.
      * Find first occurrence of this key */
     int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
@@ -1883,7 +1905,8 @@ qmap_lnext(uint32_t *sn, uint32_t cur_id)
 
     n = qmap->sorted_idx[cursor->pos];
 
-    if (cursor->key && (head->flags & QM_MULTIVALUE)) {
+    if (cursor->key && (head->flags & QM_MULTIVALUE)
+        && !(cursor->flags & QM_RANGE_GE)) {
       if (cursor->end_pos == QM_MISS)
         cursor->end_pos = (uint32_t) qmap_bsearch_ex(
             cursor->hd, cursor->key, NULL,
