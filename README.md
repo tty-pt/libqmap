@@ -120,6 +120,60 @@ qmap_drop(by_time);
 - `qmap_del(hd, key)` - Deletes only the first occurrence for QM_MULTIVALUE maps
 - `qmap_del_all(hd, key)` - Deletes all occurrences for a given key
 
+## Recall Kernel (`rec.h`)
+
+A domain-free **"filter by axis → join → rank"** loop over uniform 64-bit
+refs (`rec_ref_t`). Axis libraries (libit time, libgeo space, stoma text)
+stay independent domain stores and feed the kernel through small adapters;
+consumers compose axes without re-writing join/rank code. Optional and
+additive — raw entry points are untouched. Spec and design:
+`docs/RECALL-KERNEL.md`.
+
+```c
+#include <ttypt/rec.h>
+
+rec_set_t  *cands = rec_set_new();
+rec_rank_t *board = rec_rank_new(10, 0.4f);   /* top-k, min-score */
+
+rec_axis_fill_bbox(geo_db, s, l, 3, cands);   /* space axis (libgeo)   */
+rec_axis_fill_interval(it_db, a, b, cands);   /* time axis (libit)     */
+/* cands == in-box AND in-interval refs, sorted, deduped.              */
+
+for (size_t i = 0; i < rec_set_count(cands); i++) {
+    rec_ref_t ref = rec_set_at(cands)[i];
+    float score;
+    if (my_score(ref, &score) == 0)          /* ranking fn (consumer) */
+        rec_rank_push(board, ref, score);
+}
+rec_rank_sorted(board, refs, scores);         /* best first            */
+rec_set_free(cands);
+rec_rank_free(board);
+```
+
+The adapter contract every axis follows: one
+`int rec_axis_fill_*(params, rec_set_t *out)` that streams matching refs
+into the set and seals it (0 ok / −1 error). Fill-only queries stay
+streaming (an axis can push straight into `rec_rank_push`); a set is
+materialized only when a second axis joins. The kernel never interprets a
+ref — mapping back to a consumer schema is the consumer's job.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `rec_set_new` | `rec_set_t *rec_set_new(void)` | New empty, unsorted set (arena-backed). |
+| `rec_set_push` | `void rec_set_push(rec_set_t *s, rec_ref_t r)` | Append a ref (unseals). |
+| `rec_set_seal` | `void rec_set_seal(rec_set_t *s)` | Sort + dedup in place; required before joins. |
+| `rec_set_fill_qmap_iter` | `int rec_set_fill_qmap_iter(rec_set_t *s, uint32_t hd)` | Drain a fixed-key qmap handle into the set. |
+| `rec_set_intersect` | `int rec_set_intersect(rec_set_t *dst, const rec_set_t *a, const rec_set_t *b)` | `dst := a ∩ b` (sealed, merge-join). |
+| `rec_set_subtract` | `int rec_set_subtract(rec_set_t *dst, const rec_set_t *a, const rec_set_t *b)` | `dst := a − b` (sealed). |
+| `rec_set_union` | `int rec_set_union(rec_set_t *dst, const rec_set_t *a, const rec_set_t *b)` | `dst := a ∪ b` (sealed). |
+| `rec_set_count` | `size_t rec_set_count(const rec_set_t *s)` | Number of refs held. |
+| `rec_set_at` | `const rec_ref_t *rec_set_at(const rec_set_t *s)` | Backing array (sealed → sorted, deduped). |
+| `rec_set_free` | `void rec_set_free(rec_set_t *s)` | Release storage. |
+| `rec_rank_new` | `rec_rank_t *rec_rank_new(size_t top_k, float min_score)` | New bounded top-k buffer (top_k 0 → NULL). |
+| `rec_rank_push` | `void rec_rank_push(rec_rank_t *rk, rec_ref_t r, float score)` | Stream a scored ref; O(log top_k). |
+| `rec_rank_sorted` | `size_t rec_rank_sorted(const rec_rank_t *rk, rec_ref_t *refs, float *scores)` | Retained results best-first; returns count. |
+| `rec_rank_free` | `void rec_rank_free(rec_rank_t *rk)` | Release the buffer. |
+
 ## Type System
 
 libqmap supports both built-in and custom types for keys and values.
@@ -338,6 +392,16 @@ idm_drop(&mgr);                       // free all managed IDs
 | | `ids_drop` | `void ids_drop(ids_t *list)` | Free all IDs in list. |
 | | `ids_iter` | `idsi_t *ids_iter(ids_t *list)` | Start iteration. |
 | | `ids_next` | `int ids_next(uint32_t *id, idsi_t **cur)` | Next ID. |
+| **Kernel (rec.h)** | `rec_set_new` | `rec_set_t *rec_set_new(void)` | New candidate set (see Recall Kernel above). |
+| | `rec_set_push` | `void rec_set_push(rec_set_t *s, rec_ref_t r)` | Append a ref. |
+| | `rec_set_seal` | `void rec_set_seal(rec_set_t *s)` | Sort + dedup before joins. |
+| | `rec_set_intersect/subtract/union` | `int (…dst, const rec_set_t *a, const rec_set_t *b)` | Set joins (merge, sealed inputs). |
+| | `rec_set_count` | `size_t rec_set_count(const rec_set_t *s)` | Refs held. |
+| | `rec_set_at` | `const rec_ref_t *rec_set_at(const rec_set_t *s)` | Backing array. |
+| | `rec_set_fill_qmap_iter` | `int rec_set_fill_qmap_iter(rec_set_t *s, uint32_t hd)` | Drain a qmap handle. |
+| | `rec_rank_new` | `rec_rank_t *rec_rank_new(size_t top_k, float min_score)` | Bounded top-k buffer. |
+| | `rec_rank_push` | `void rec_rank_push(rec_rank_t *rk, rec_ref_t r, float score)` | Stream a scored ref. |
+| | `rec_rank_sorted` | `size_t rec_rank_sorted(const rec_rank_t *rk, rec_ref_t *refs, float *scores)` | Best-first results. |
 
 ## Docs
 Use the man pages for complete library and CLI documentation:

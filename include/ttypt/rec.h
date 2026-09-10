@@ -13,6 +13,15 @@
  * axis libraries are untouched. Ref mapping is the consumer's job — the
  * kernel never interprets a ref.
  *
+ * Adapter contract: an axis exposes ONE filler
+ *   int rec_axis_fill_*(<domain query args>, rec_set_t *out);
+ * that streams the refs matching its filter into the set and seals it
+ * (0 ok / -1 error). Fill-only queries stay streaming (the axis pushes
+ * straight into rec_rank_push); a set is materialized only when a second
+ * axis or ranker joins. Approximate fills (e.g. ANN neighbors) must
+ * declare themselves, since intersecting with an approximate set bounds
+ * final recall by it. Full design: docs/RECALL-KERNEL.md.
+ *
  * @see qmap.h
  */
 #ifndef TTYPT_REC_H
