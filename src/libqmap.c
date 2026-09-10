@@ -31,6 +31,10 @@
 
 #define DEBUG_LVL 1
 
+/* Internal iterator flag: cursor walks a QM_MULTIVALUE duplicate chain
+ * (via qmap->mv_next[]) instead of hash/position space. */
+#define QM_MVCHAIN 0x80000000u
+
 #define DEBUG(lvl, ...) \
   if (DEBUG_LVL > lvl) WARN(__VA_ARGS__)
 
@@ -79,6 +83,7 @@ typedef struct {
   uint32_t *map;  	// id -> n
   const void **omap;	// n -> key
   uint32_t *key_hashes;	// n -> cached key hash
+  uint32_t *mv_next;	// n -> next duplicate position in QM_MULTIVALUE chain
   void **table;		// n -> values
   size_t *key_sizes;	// n -> size of allocated key
   size_t *val_sizes;	// n -> size of allocated value
@@ -415,6 +420,76 @@ qmap_id(uint32_t hd, const void * const key)
   return qmap_id_ex(hd, key, NULL, NULL);
 }
 
+/* Close the hole left by clearing map[d] by shifting the following cluster
+ * left, preserving the no-holes invariant: no live element may have an
+ * empty slot in front of its home-to-slot probe path. A position p at slot j
+ * is moved into the hole at d iff d lies within its cyclic probe interval
+ * [ideal(p), j) (i.e. the hole is reachable from home before j), with
+ * ideal(p) = key_hashes[p] & mask. The scan CONTINUES past non-movable
+ * elements (their home is past the hole; a later wrapped element may still
+ * be movable) and stops only at an EMPTY slot or after head->m probes.
+ * Only slot -> position entries move; per-key duplicate chains store
+ * positions, so they are unaffected. O(cluster). */
+  static inline void
+qmap_backshift(uint32_t hd, uint32_t d)
+{
+  qmap_head_t *head = &qmap_heads[hd];
+  qmap_t *qmap = &qmaps[hd];
+  uint32_t mask = head->mask;
+  uint32_t j = d;
+  uint32_t probe_count = 0;
+
+  while (probe_count < head->m) {
+    j = (j + 1) & mask;
+    probe_count++;
+
+    uint32_t p = qmap->map[j];
+    if (p == QM_MISS)
+      break;
+
+    uint32_t ideal = qmap->key_hashes[p] & mask;
+    if ((uint32_t)(d - ideal) < (uint32_t)(j - ideal)) {
+      qmap->map[d] = p;
+      qmap->map[j] = QM_MISS;
+      d = j;
+    }
+  }
+}
+
+/* Append position n to the duplicate chain rooted at head (tail-append
+ * preserves insertion order). n's next pointer is reset to QM_MISS. */
+  static inline void
+qmap_mv_link(qmap_t *qmap, uint32_t head, uint32_t n)
+{
+  uint32_t tail = head;
+  while (qmap->mv_next[tail] != QM_MISS)
+    tail = qmap->mv_next[tail];
+  qmap->mv_next[tail] = n;
+  qmap->mv_next[n] = QM_MISS;
+}
+
+/* Unlink position n from the chain rooted at head; return the promoted
+ * head (the next duplicate, or QM_MISS when n was the only member). n's
+ * next pointer is reset to QM_MISS. */
+  static uint32_t
+qmap_mv_unlink(qmap_t *qmap, uint32_t head, uint32_t n)
+{
+  uint32_t prev = QM_MISS, p = head;
+  while (p != QM_MISS && p != n) {
+    prev = p;
+    p = qmap->mv_next[p];
+  }
+  if (p == QM_MISS) {
+    /* Not a member of this chain; leave everything untouched */
+    return head;
+  }
+  if (prev == QM_MISS)
+    return qmap->mv_next[n];
+  qmap->mv_next[prev] = qmap->mv_next[n];
+  qmap->mv_next[n] = QM_MISS;
+  return head;
+}
+
 /* }}} */
 
 /* B-TREE SUPPORT HELPERS {{{ */
@@ -588,6 +663,10 @@ _qmap_open(uint32_t ktype, uint32_t vtype,
   qmap->key_hashes = calloc(len, sizeof(*qmap->key_hashes));
   CBUG(!qmap->key_hashes, "malloc error (key_hashes)\n");
 
+  qmap->mv_next = malloc(sizeof(uint32_t) * len);
+  CBUG(!qmap->mv_next, "malloc error (mv_next)\n");
+  memset(qmap->mv_next, 0xFF, sizeof(uint32_t) * len);   /* QM_MISS */
+
   if (flags & QM_SORTED) {
     qmap->sorted_idx = malloc(sizeof(uint32_t) * len);
     CBUG(!qmap->sorted_idx, "malloc error (sorted_idx)\n");
@@ -623,20 +702,53 @@ qmap_rebuild_map(uint32_t hd)
   memset(qmap->map, 0xFF,
       sizeof(uint32_t) * head->m);
 
+  /* For QM_MULTIVALUE maps, duplicate chains must be re-linked so the
+   * chain head equals the position stored in the hash slot (the first
+   * live position for the key, in position order). Chain head and slot
+   * entry diverge when positions are freed and reused out of insertion
+   * order. The map is freshly memset here (hole-free), so the early-exit
+   * qmap_id_hash probe re-discovers each key's single home slot: the first
+   * occurrence lands at first-empty-from-home and later duplicates converge
+   * on the head slot via key match. */
+  int mv = (head->flags & QM_MULTIVALUE) != 0;
+  uint32_t *chain_prev = NULL;
+  if (mv) {
+    chain_prev = malloc(sizeof(uint32_t) * head->m);
+    CBUG(!chain_prev, "malloc error (chain_prev)\n");
+    for (uint32_t i = 0; i < head->m; i++)
+      chain_prev[i] = QM_MISS;
+  }
+
   for (uint32_t n = 0; n < qmap->idm.last; n++) {
     const void *key = qmap->omap[n];
 
     if (!key)
       continue;
 
-    uint32_t id =
-      qmap->key_hashes[n] & head->mask;
-
-    while (qmap->map[id] != QM_MISS)
-      id = (id + 1) & head->mask;
-
-    qmap->map[id] = n;
+    uint32_t id;
+    if (chain_prev) {
+      id = qmap_id_hash(hd, key, qmap->key_sizes[n],
+                        qmap->key_hashes[n]);
+      if (id == QM_MISS)
+        continue;
+      if (chain_prev[id] != QM_MISS) {
+        /* duplicate: link after the previous live position */
+        qmap->mv_next[chain_prev[id]] = n;
+      } else {
+        /* head: first live position for this key */
+        qmap->map[id] = n;
+      }
+      chain_prev[id] = n;
+      qmap->mv_next[n] = QM_MISS;
+    } else {
+      id = qmap->key_hashes[n] & head->mask;
+      while (qmap->map[id] != QM_MISS)
+        id = (id + 1) & head->mask;
+      qmap->map[id] = n;
+    }
   }
+
+  free(chain_prev);
 }
 
   static void
@@ -674,6 +786,12 @@ qmap_grow(uint32_t hd)
   CBUG(!tmp, "realloc(key_hashes)");
   qmap->key_hashes = tmp;
   memset(qmap->key_hashes + old_m, 0,
+      sizeof(uint32_t) * (new_m - old_m));
+
+  tmp = realloc(qmap->mv_next, sizeof(uint32_t) * new_m);
+  CBUG(!tmp, "realloc(mv_next)");
+  qmap->mv_next = tmp;
+  memset(qmap->mv_next + old_m, 0xFF,
       sizeof(uint32_t) * (new_m - old_m));
 
   tmp = realloc(qmap->key_sizes, sizeof(size_t) * new_m);
@@ -1142,10 +1260,9 @@ _qmap_put(uint32_t hd, const void * key,
   uint32_t key_hash;
   uint32_t lookup_id;
   uint32_t key_id;
+  uint32_t old_n = QM_MISS;
 
   if (key) {
-    uint32_t old_n;
-
     lookup_id = qmap_id_ex(hd, key, &key_len, &key_hash);
     if (lookup_id == QM_MISS) {
       WARN("qmap %u: probe failure after grow", hd);
@@ -1253,21 +1370,43 @@ _qmap_put(uint32_t hd, const void * key,
 
   qmap->omap[n] = rkey;
 
-  /* When sharing a position with the primary on updates, a different
-   * secondary key may overwrite the same position. Clear any stale hash
-   * entries that still point to this position from the former key. */
-  if (head->phd != hd && pn != QM_MISS) {
-    for (uint32_t i = 0; i < head->m; i++) {
-      if (qmap->map[i] == n) {
-        qmap->map[i] = QM_MISS;
-        break;
-      }
+  /* QM_MULTIVALUE duplicate chains: freshly-allocated duplicate positions
+   * are linked into the key's chain (head = first occurrence in map).
+   * Mirrors/shared-position puts (pn != QM_MISS, n != old_n) and in-place
+   * updates (n == old_n) are not chained. */
+  if (head->flags & QM_MULTIVALUE) {
+    if (pn == QM_MISS) {
+      qmap->mv_next[n] = QM_MISS;
+      if (old_n != QM_MISS)
+        qmap_mv_link(qmap, old_n, n);
+    } else if (n != old_n) {
+      qmap->mv_next[n] = QM_MISS;
     }
   }
 
   /* For QM_MULTIVALUE duplicates, don't update hash table */
   if (!(head->flags & QM_MULTIVALUE) || qmap->map[lookup_id] == QM_MISS || qmap->map[lookup_id] == n)
     qmap->map[lookup_id] = n;
+
+  /* When sharing a position with the primary on updates, a different
+   * secondary key may overwrite the same position. Clear any stale hash
+   * entries that still point to this position from the former key, then
+   * close the hole. Done after the head slot above is (re)filled so the
+   * backshift cannot displace this put's own head entry. The stale slot
+   * cannot be located by key probe (the former key is gone), so this stays
+   * a scan; it only fires on the shared-position mirror path. */
+  if (head->phd != hd && pn != QM_MISS) {
+    for (uint32_t i = 0; i < head->m; i++) {
+      if (qmap->map[i] == n) {
+        qmap->map[i] = QM_MISS;
+        if (i != lookup_id)
+          qmap_backshift(hd, i);
+        else
+          qmap->map[lookup_id] = n;
+        break;
+      }
+    }
+  }
 
   head->iflags |= QM_SDIRTY;
 
@@ -1571,38 +1710,23 @@ static void qmap_ndel_topdown(uint32_t hd, uint32_t n) {
     return;
   }
 
-  id = qmap_id(hd, key);
-
-  /* For QM_MULTIVALUE maps, check if other duplicates exist before clearing hash entry.
-   * Do this BEFORE freeing the key! */
+  /* For QM_MULTIVALUE maps, unlink position n from the key's duplicate
+   * chain (promoting the next duplicate as the slot head, or clearing the
+   * slot when n was the only member). Chain mutation is O(k) and avoids
+   * the sorted-index rebuild of the old bsearch-based path. */
   uint32_t new_map_entry = QM_MISS;
   if (head->flags & QM_MULTIVALUE) {
-    int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
-
-    if (first != -1) {
-      uint32_t first_pos = qmap->sorted_idx[first];
-      if (first_pos == n) {
-        /* Deleting the first entry, check if a second exists */
-        int second = first + 1;
-        if (second < (int)head->sorted_n) {
-          const void *second_key = qmap_key(hd, qmap->sorted_idx[second]);
-          qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
-          size_t key_len = qmap->key_sizes[n];
-          size_t len;
-          if (type->measure) {
-            size_t second_len = qmap->key_sizes[qmap->sorted_idx[second]];
-            len = (key_len > second_len) ? key_len : second_len;
-          } else
-            len = type->len;
-
-          if (type->cmp(key, second_key, len) == 0)
-            new_map_entry = qmap->sorted_idx[second];
-        }
-      } else {
-        /* Not deleting first entry, first remains valid */
-        new_map_entry = first_pos;
-      }
+    size_t dklen;
+    uint32_t dkhash;
+    (void) qmap_id_ex(hd, key, &dklen, &dkhash);
+    id = qmap_id_hash(hd, key, dklen, dkhash);
+    if (id != QM_MISS) {
+      uint32_t head_pos = qmap->map[id];
+      if (head_pos != QM_MISS)
+        new_map_entry = qmap_mv_unlink(qmap, head_pos, n);
     }
+  } else {
+    id = qmap_id(hd, key);
   }
 
   if (head->phd == hd) {
@@ -1620,8 +1744,10 @@ static void qmap_ndel_topdown(uint32_t hd, uint32_t n) {
   if (id != QM_MISS) {
     if (new_map_entry != QM_MISS)
       qmap->map[id] = new_map_entry;
-    else
+    else {
       qmap->map[id] = QM_MISS;
+      qmap_backshift(hd, id);
+    }
   }
 
   qmap->omap[n] = NULL;
@@ -1654,6 +1780,7 @@ qmap_clear_fast(uint32_t hd)
   memset(qmap->map, 0xFF, sizeof(uint32_t) * head->m);
   memset(qmap->omap, 0, sizeof(void *) * head->m);
   memset(qmap->key_hashes, 0, sizeof(uint32_t) * head->m);
+  memset(qmap->mv_next, 0xFF, sizeof(uint32_t) * head->m);
   memset(qmap->key_sizes, 0, sizeof(size_t) * head->m);
   if (head->phd == hd) {
     memset(qmap->table, 0, sizeof(void *) * head->m);
@@ -1730,16 +1857,20 @@ qmap_del(uint32_t hd, const void * const key)
     }
   }
 
-  uint32_t cur = qmap_iter(hd, key, 0), sn;
+  uint32_t cur, sn;
 
   if (head->flags & QM_MULTIVALUE) {
-    if (qmap_lnext(&sn, cur)) {
-      if (head->record_id > 0 && head->inv_hds)
-        clean_inverses_for_pos(head, sn);
-      qmap_ndel(hd, sn);
+    cur = qmap_get_multi(hd, key);
+    if (cur != QM_MISS) {
+      if (qmap_lnext(&sn, cur)) {
+        if (head->record_id > 0 && head->inv_hds)
+          clean_inverses_for_pos(head, sn);
+        qmap_ndel(hd, sn);
+      }
+      qmap_fin(cur);
     }
-    qmap_fin(cur);
   } else {
+    cur = qmap_iter(hd, key, 0);
     while (qmap_lnext(&sn, cur)) {
       if (head->record_id > 0 && head->inv_hds)
         clean_inverses_for_pos(head, sn);
@@ -1893,6 +2024,17 @@ qmap_lnext(uint32_t *sn, uint32_t cur_id)
   register qmap_t *qmap = &qmaps[cursor->hd];
   uint32_t n;
   const void *key;
+
+  if (cursor->flags & QM_MVCHAIN) {
+    /* Duplicate-chain walk (qmap_get_multi): yield the current position
+     * and advance to its next-duplicate link. */
+    if (cursor->pos >= qmap->idm.last)
+      goto end;
+    n = cursor->pos;
+    cursor->pos = qmap->mv_next[n];
+    *sn = n;
+    return 1;
+  }
 
   if ((cursor->flags & QM_RANGE)
       && (head->flags & QM_SORTED))
@@ -2050,6 +2192,7 @@ qmap_close(uint32_t hd)
   free(qmap->map);
   free(qmap->omap);
   free(qmap->key_hashes);
+  free(qmap->mv_next);
   free(qmap->key_sizes);
   free(qmap->val_sizes);
   if (qmap->sorted_idx)
@@ -2631,23 +2774,41 @@ qmap_save(void)
 qmap_get_multi(uint32_t hd, const void *key)
 {
   qmap_head_t *head = &qmap_heads[hd];
-  uint32_t cur = qmap_iter(hd, key, 0);
+  qmap_t *qmap = &qmaps[hd];
 
-  if (!key)
-    return cur;
+  if (key == NULL)
+    return qmap_iter(hd, NULL, 0);
 
-  /* qmap_iter() already did the lookup. Just verify that it landed on a
-   * real entry before returning the cursor to the caller. */
-  if (head->flags & QM_MULTIVALUE) {
-    if (qmap_cursors[cur].pos >= head->sorted_n) {
+  if (!(head->flags & QM_MULTIVALUE)) {
+    uint32_t cur = qmap_iter(hd, key, 0);
+    if (qmap_cursors[cur].pos == QM_MISS) {
       qmap_fin(cur);
       return QM_MISS;
     }
-  } else if (qmap_cursors[cur].pos == QM_MISS) {
-    qmap_fin(cur);
-    return QM_MISS;
+    return cur;
   }
 
+  /* QM_MULTIVALUE: walk the key's duplicate chain (O(k)). Cursor advances
+   * through qmap->mv_next[] in insertion order, avoiding the sorted-index
+   * rebuild that qmap_iter(key, QM_RANGE) would trigger on a dirty map. */
+  size_t key_len;
+  uint32_t key_hash;
+  (void) qmap_id_ex(hd, key, &key_len, &key_hash);
+  uint32_t mv_slot = qmap_id_hash(hd, key, key_len, key_hash);
+  uint32_t head_pos = (mv_slot != QM_MISS) ? qmap->map[mv_slot] : QM_MISS;
+  if (head_pos == QM_MISS)
+    return QM_MISS;
+
+  uint32_t cur = idm_new(&cursor_idm);
+  qmap_cur_t *cursor = &qmap_cursors[cur];
+  cursor->hd = hd;
+  cursor->pos = head_pos;
+  cursor->ipos = head_pos;
+  cursor->end_pos = QM_MISS;
+  cursor->sub_cur = 0;
+  cursor->key = NULL;
+  cursor->key_len = 0;
+  cursor->flags = QM_MVCHAIN;
   return cur;
 }
 

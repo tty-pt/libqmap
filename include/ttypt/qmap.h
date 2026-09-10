@@ -578,8 +578,8 @@ void qmap_fin(uint32_t cur_id);
  *
  * For maps with QM_MULTIVALUE flag, this returns a cursor that
  * iterates over ALL values associated with the given key in
- * sorted order. For maps without QM_MULTIVALUE, this behaves
- * like a single-value iterator.
+ * insertion order (the order the duplicates were put). For maps
+ * without QM_MULTIVALUE, this behaves like a single-value iterator.
  *
  * @param[in] hd  Map handle.
  * @param[in] key Key to look up.
@@ -598,7 +598,9 @@ void qmap_fin(uint32_t cur_id);
  * }
  * @endcode
  *
- * @note Internally, this is equivalent to: qmap_iter(hd, key, 0)
+ * @note Internally, this walks the key's duplicate chain (O(k)) — it does
+ *   NOT trigger the sorted-index rebuild, so it is cheap even on a dirty
+ *   map and on maps that are never queried via sorted iteration.
  * @note For single-value lookups, qmap_get() is more efficient
  * @see qmap_del_all for deleting all duplicates at once
  * @see qmap_count for counting entries without iteration

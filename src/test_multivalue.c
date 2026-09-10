@@ -1019,6 +1019,319 @@ static void test_range_ge(void)
 	qmap_close(hd);
 }
 
+/* Test 20: duplicate chain basics - insertion order via qmap_get_multi,
+ * head promotion on qmap_del, and chain exhaustion. */
+static void test_chain_basic_ops(void)
+{
+	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF,
+	                        QM_SORTED | QM_MULTIVALUE);
+	assert(hd != QM_MISS);
+	uint32_t key = 7;
+	uint32_t vals[4] = {10, 20, 30, 40};
+	for (int i = 0; i < 4; i++)
+		qmap_put(hd, &key, &vals[i]);
+
+	/* Insertion order: chain is tail-appended */
+	uint32_t cur = qmap_get_multi(hd, &key);
+	assert(cur != QM_MISS);
+	const void *k, *v;
+	uint32_t expect[4] = {10, 20, 30, 40};
+	int n = 0;
+	while (qmap_next(&k, &v, cur)) {
+		assert(*(const uint32_t *)k == 7);
+		assert(*(const uint32_t *)v == expect[n]);
+		n++;
+	}
+	qmap_fin(cur);
+	assert(n == 4);
+
+	/* qmap_del removes the head; next duplicate is promoted */
+	qmap_del(hd, &key);
+	cur = qmap_get_multi(hd, &key);
+	assert(cur != QM_MISS);
+	n = 0;
+	while (qmap_next(&k, &v, cur)) {
+		assert(*(const uint32_t *)v == expect[n + 1]);
+		n++;
+	}
+	qmap_fin(cur);
+	assert(n == 3);
+
+	/* Delete the rest; chain exhausted -> QM_MISS */
+	qmap_del(hd, &key);
+	qmap_del(hd, &key);
+	qmap_del(hd, &key);
+	assert(qmap_get_multi(hd, &key) == QM_MISS);
+	assert(qmap_get(hd, &key) == NULL);
+	assert(qmap_count(hd, &key) == 0);
+
+	/* Map still works afterwards */
+	qmap_put(hd, &(uint32_t){8}, &(uint32_t){5});
+	assert(qmap_count(hd, &(uint32_t){8}) == 1);
+	qmap_close(hd);
+}
+
+/* Test 21: chains survive grow, free-list reuse (LIFO reverses insertion
+ * order) and qmap_rebuild_map re-linking without losing or mixing
+ * duplicates. */
+static void test_chain_grow_relink(void)
+{
+	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF,
+	                        QM_SORTED | QM_MULTIVALUE);
+	assert(hd != QM_MISS);
+
+	const uint32_t NKEYS = 200;
+	const uint32_t DUPS = 35;   /* 200*35 = 7000 entries -> grows to 65536 slots */
+
+	for (uint32_t k = 0; k < NKEYS; k++) {
+		for (uint32_t i = 0; i < DUPS; i++) {
+			uint32_t val = k * 1000 + i + 1;
+			qmap_put(hd, &k, &val);
+		}
+	}
+
+	/* Delete all dups of even keys; rebuild re-links remaining chains */
+	for (uint32_t k = 0; k < NKEYS; k += 2)
+		qmap_del_all(hd, &k);
+
+	/* Re-insert even keys: positions are reused LIFO, so insertion order
+	 * differs from position order. Chains must stay complete. */
+	for (uint32_t k = 0; k < NKEYS; k += 2) {
+		for (uint32_t i = 0; i < DUPS; i++) {
+			uint32_t val = k * 1000 + i + 1;
+			qmap_put(hd, &k, &val);
+		}
+	}
+
+	/* Trigger another rebuild re-link via an unrelated del_all */
+	uint32_t key0 = 0;
+	qmap_del_all(hd, &key0);
+
+	const void *k, *v;
+	uint32_t cur;
+
+	/* Verify all remaining keys: exact counts, no cross-key mixing */
+	for (uint32_t kk = 1; kk < NKEYS; kk++) {
+		assert(qmap_count(hd, &kk) == DUPS);
+		cur = qmap_get_multi(hd, &kk);
+		assert(cur != QM_MISS);
+		int seen[DUPS];
+		memset(seen, 0, sizeof(seen));
+		int n = 0;
+		while (qmap_next(&k, &v, cur)) {
+			uint32_t val = *(const uint32_t *)v;
+			assert(val >= kk * 1000 + 1 && val <= kk * 1000 + DUPS);
+			seen[val - kk * 1000 - 1] = 1;
+			n++;
+		}
+		qmap_fin(cur);
+		assert(n == (int)DUPS);
+		for (int i = 0; i < (int)DUPS; i++)
+			assert(seen[i] == 1);
+	}
+
+	/* Key 0 was fully removed */
+	assert(qmap_count(hd, &key0) == 0);
+
+	/* Total entry count is exact */
+	cur = qmap_iter(hd, NULL, 0);
+	int total = 0;
+	while (qmap_next(&k, &v, cur)) total++;
+	assert(total == (int)(NKEYS * DUPS - DUPS));
+
+	qmap_close(hd);
+}
+
+/* qmap_assoc callback: secondary key = the primary's stored value */
+static void assoc_val(const void **skey, const void * const pkey,
+	const void * const value, void *userdata)
+{
+	(void)pkey; (void)userdata;
+	*skey = value;
+}
+
+/* Test 22: assoc-linked multivalue close must complete at scale.
+ * Regression for the close-path hang (per-entry sorted rebuild). */
+static void test_chain_assoc_close(void)
+{
+	uint32_t primary = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF, 0);
+	uint32_t by_val  = qmap_open(NULL, NULL, QM_U32, QM_U32, 0xFF,
+	                             QM_SORTED | QM_MULTIVALUE);
+	assert(primary != QM_MISS && by_val != QM_MISS);
+	qmap_assoc(by_val, primary, assoc_val, NULL);
+
+	for (uint32_t i = 0; i < 20000; i++)
+		qmap_put(primary, &i, &i);
+
+	uint32_t d0 = 0;
+	assert(qmap_count(by_val, &d0) == 1);
+
+	qmap_close(primary);
+	qmap_close(by_val);
+}
+
+/* Test 23: file-backed multivalue round-trip - chains rebuilt on load via
+ * qmap_put re-insertion. */
+static void test_chain_persist(void)
+{
+	const char *filename = "test_chain_persist.qmap";
+
+	uint32_t hd = qmap_open(filename, "chaindb", QM_U32, QM_U32, 0xFF,
+	                        QM_SORTED | QM_MULTIVALUE);
+	assert(hd != QM_MISS);
+	uint32_t key = 42;
+	for (uint32_t i = 0; i < 10; i++)
+		qmap_put(hd, &key, &i);
+	assert(qmap_count(hd, &key) == 10);
+	qmap_save();
+	qmap_close(hd);
+
+	hd = qmap_open(filename, "chaindb", QM_U32, QM_U32, 0xFF,
+	               QM_SORTED | QM_MULTIVALUE);
+	assert(hd != QM_MISS);
+	assert(qmap_count(hd, &key) == 10);
+	uint32_t cur = qmap_get_multi(hd, &key);
+	assert(cur != QM_MISS);
+	const void *k, *v;
+	int n = 0;
+	while (qmap_next(&k, &v, cur)) {
+		assert(*(const uint32_t *)k == 42);
+		assert(*(const uint32_t *)v < 10);
+		n++;
+	}
+	qmap_fin(cur);
+	assert(n == 10);
+	qmap_close(hd);
+
+	remove(filename);
+}
+
+/* Test 24: hole-eliminating backshift (non-wrap cluster) — non-MV map.
+ * Regression: a stale hole before an existing key used to make the
+ * early-exit probe return the hole slot (qmap_get -> NULL) and a re-put
+ * would insert a duplicate into a non-MV map. With backshift the cluster
+ * shifts left and every probe resolves. */
+static void test_backshift_cluster(void)
+{
+	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32,
+	                        0x7 /* 8 slots */, 0);
+	assert(hd != QM_MISS);
+
+	uint32_t keys[] = { 0, 8, 16, 24, 32 };   /* home 0: cluster slots 0..4 */
+	for (size_t i = 0; i < 5; i++)
+		qmap_put(hd, &keys[i], &keys[i]);
+
+	/* Delete the slot-1 member: hole at 1 must be back-shifted away. */
+	uint32_t k8 = 8, k24 = 24, k16 = 16, k32 = 32, k40 = 40;
+	qmap_del(hd, &k8);
+
+	/* The previously-orphaned-by-hole keys must still resolve. */
+	assert(qmap_get(hd, &k16) != NULL);
+	assert(qmap_get(hd, &k24) != NULL);
+	assert(qmap_get(hd, &k32) != NULL);
+	assert(qmap_get(hd, &k8) == NULL);
+
+	/* Re-putting the deleted key adds a new position (count 5). */
+	assert(qmap_count(hd, NULL) == 4);
+	qmap_put(hd, &k8, &k8);
+	assert(qmap_count(hd, NULL) == 5);
+
+	/* Re-putting an EXISTING key must not create a duplicate. */
+	qmap_put(hd, &k24, &(uint32_t){240});
+	assert(qmap_count(hd, NULL) == 5);
+	const uint32_t *v24 = qmap_get(hd, &k24);
+	assert(v24 != NULL && *v24 == 240);
+
+	/* Fresh key beyond former holes lands correctly. */
+	qmap_put(hd, &k40, &k40);
+	assert(qmap_count(hd, NULL) == 6);
+	const uint32_t *v40 = qmap_get(hd, &k40);
+	assert(v40 != NULL && *v40 == k40);
+
+	uint32_t cur = qmap_iter(hd, NULL, 0);
+	const void *k, *v;
+	int occ_24 = 0;
+	while (qmap_next(&k, &v, cur)) {
+		if (*(const uint32_t *)k == k24)
+			occ_24++;
+	}
+	qmap_fin(cur);
+	assert(occ_24 == 1);
+	qmap_close(hd);
+
+	/* MV map: delete a neighbor of a chain head mid-cluster; the chain must
+	 * survive the backshift and the head's slot entry must stay put. */
+	uint32_t mv = qmap_open(NULL, NULL, QM_U32, QM_U32,
+	                        0x7, QM_MULTIVALUE | QM_SORTED);
+	assert(mv != QM_MISS);
+	uint32_t k0 = 0, m24 = 24;
+	qmap_put(mv, &m24, &(uint32_t){1});   /* chain head at slot 0 */
+	qmap_put(mv, &m24, &(uint32_t){2});
+	qmap_put(mv, &k0, &(uint32_t){3});    /* slot 1 */
+	qmap_put(mv, &k16, &(uint32_t){4});   /* slot 2 */
+	qmap_put(mv, &k32, &(uint32_t){5});   /* slot 3 */
+
+	qmap_del(mv, &k0);                    /* clears slot 1 + backshift */
+
+	uint32_t mcur = qmap_get_multi(mv, &m24);
+	assert(mcur != QM_MISS);
+	int n = 0;
+	while (qmap_next(&k, &v, mcur)) n++;
+	qmap_fin(mcur);
+	assert(n == 2);
+	assert(qmap_get(mv, &k16) != NULL);
+	assert(qmap_get(mv, &k32) != NULL);
+
+	qmap_put(mv, &m24, &(uint32_t){6});   /* third dup links onto tail */
+	mcur = qmap_get_multi(mv, &m24);
+	assert(mcur != QM_MISS);
+	n = 0;
+	while (qmap_next(&k, &v, mcur)) n++;
+	qmap_fin(mcur);
+	assert(n == 3);
+	qmap_close(mv);
+}
+
+/* Test 25: backshift across the table wrap with a skipped unmovable
+ * element. Cluster {7,0,1,2,3} homes {7,7,7,2,7}: deleting slot 7 must
+ * move 15/23 into the hole, SKIP the home-anchored key at slot 2, and
+ * continue to move 31 — stopping only at the empty slot. */
+static void test_backshift_wrap(void)
+{
+	uint32_t hd = qmap_open(NULL, NULL, QM_U32, QM_U32,
+	                        0x7 /* 8 slots */, 0);
+	assert(hd != QM_MISS);
+
+	uint32_t k7 = 7, k15 = 15, k23 = 23, k2 = 2, k31 = 31, k39 = 39;
+	qmap_put(hd, &k7, &k7);    /* slot 7 */
+	qmap_put(hd, &k15, &k15);  /* slot 0 (wrap) */
+	qmap_put(hd, &k23, &k23);  /* slot 1 (wrap) */
+	qmap_put(hd, &k2, &k2);    /* slot 2 (at home) */
+	qmap_put(hd, &k31, &k31);  /* slot 3 (wrap) */
+
+	qmap_del(hd, &k7);         /* hole at 7 */
+
+	assert(qmap_get(hd, &k15) != NULL);
+	assert(qmap_get(hd, &k23) != NULL);
+	assert(qmap_get(hd, &k2) != NULL);
+	assert(qmap_get(hd, &k31) != NULL);
+	assert(qmap_get(hd, &k7) == NULL);
+	assert(qmap_count(hd, NULL) == 4);
+
+	/* Post-backshift insert into the vacated region resolves correctly. */
+	qmap_put(hd, &k39, &k39);
+	assert(qmap_count(hd, NULL) == 5);
+	const uint32_t *v39 = qmap_get(hd, &k39);
+	assert(v39 != NULL && *v39 == k39);
+
+	/* Everything still locatable after the new insert. */
+	assert(qmap_get(hd, &k15) != NULL);
+	assert(qmap_get(hd, &k23) != NULL);
+	assert(qmap_get(hd, &k2) != NULL);
+	assert(qmap_get(hd, &k31) != NULL);
+	qmap_close(hd);
+}
+
 int main(void)
 {
 	printf("=== QM_MULTIVALUE Test Suite ===\n\n");
@@ -1042,6 +1355,12 @@ int main(void)
 	TEST(test_multivalue_stress);
 	TEST(test_bug3_range_returns_all_duplicates);
 	TEST(test_range_ge);
+	TEST(test_chain_basic_ops);
+	TEST(test_chain_grow_relink);
+	TEST(test_chain_assoc_close);
+	TEST(test_chain_persist);
+	TEST(test_backshift_cluster);
+	TEST(test_backshift_wrap);
 	
 	printf("\n=== All tests passed! ===\n");
 	return 0;
