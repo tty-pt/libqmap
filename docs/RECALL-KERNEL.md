@@ -85,7 +85,7 @@ rec_rank_free(board);
 
 ## Kernel vs axes
 
-| Owns | The kernel | An axis (libit, libgeo, stoma, …) |
+| Owns | The kernel | An axis (libjoint, libislet, stoma, …) |
 |---|---|---|
 | Storage | — (no domain data) | its domain store (interval DB, morton index, inverted index) |
 | Candidates | `rec_set_t` (fill/intersect/subtract/union/count) | its filter result, poured into a set via its adapter |
@@ -112,7 +112,7 @@ Rules (the contract):
    adapter can merge-join against it. A ref reachable through several
    matches enters the set once.
 4. **Additive.** Raw axis entry points remain; the adapter is optional.
-5. **The ref is the axis's native id, widened.** libgeo stores uint32 cell
+5. **The ref is the axis's native id, widened.** libislet stores uint32 cell
    values and widens them to `rec_ref_t` at fill time; stoma fills the
    caller's decimal row ids (`rec_axis_fill_tokens` pushes `strtoull`
    of the row id, `stoma_rank` reverses it). The kernel never interprets a
@@ -140,8 +140,8 @@ final recall by the approximate one — `m` is the visible knob.
 
 | Axis | Fill | Rank | Exact? |
 |---|---|---|---|
-| libit | interval membership `[a,b)` | optional recency | exact |
-| libgeo | bbox membership | optional distance | exact |
+| libjoint | interval membership `[a,b)` | optional recency | exact |
+| libislet | bbox membership | optional distance | exact |
 | stoma | lexical token set | FTS score | exact |
 | libsepal (ANN) | **approximate** Hamming top-m | exact cosine | approximate (flag) |
 
@@ -188,6 +188,25 @@ int slot = rec_axis_register(...);        /* from the constructor, or looked up 
 rec_axis_set_ctx(slot, store_handle);
 ```
 
+#### The `rec_axis_open` convention (optional, CLI-specific — not core API)
+
+An axis `.so` **may** additionally export a plain C symbol:
+
+```c
+void *rec_axis_open(const char *spec);
+```
+
+which opens whatever store the axis needs from an opaque spec string (a
+path, a `path:opts` string, several `key=val` sub-specs joined by a
+delimiter — entirely the axis's own business) and returns the ctx pointer
+a consumer then passes to `rec_axis_set_ctx()`. This is **not** part of
+the `rec_query` registry API — libqmap never declares, exports, or calls
+`rec_axis_open` itself; it is purely a naming convention a `dlopen`-based
+consumer (such as `qmap -Q`'s `--open SPEC` flag) can rely on to bind a
+freshly-loaded axis without per-axis-specific glue code. Keeps the
+"zero axis dependency" invariant intact: this is CLI↔axis-plugin
+convention, not kernel-declared API.
+
 ### Running a query
 
 ```c
@@ -220,17 +239,19 @@ keeping the CLI generic.
 ### Plugin loading stays consumer-side
 
 `dlopen` happens in the CLI or library user, never in libqmap's own link
-table: `ldd bin/qmap` shows only `libqmap` + libc + dl, and a
-`grep -E 'stoma|libit|libgeo|libsepal'` across libqmap source and headers
-returns zero matches.
+table: `ldd bin/qmap` shows only `libqmap` + `libqsys` + libc + libxxhash,
+and a `grep -E 'stoma|libjoint|libislet|libsepal'` across libqmap source
+and headers returns zero matches.
 
 ## Status
 
 - Kernel (`rec.h`/`rec.c` + `rec_test`, `bench_rec`): landed in this repo,
   branch `kernel`.
-- libgeo adapter `rec_axis_fill_bbox`: implemented (libgeo branch `kernel`).
-- libit adapter `rec_axis_fill_interval`: implemented (libit branch `kernel`,
-  via the libit `rec_axis_t` registration — PLAN-REC-QUERY §3.1).
+- libislet adapter `rec_axis_fill_bbox`: implemented (libislet branch
+  `kernel`).
+- libjoint adapter `rec_axis_fill_interval`: implemented (libjoint branch
+  `kernel`, via the libjoint `rec_axis_t` registration — PLAN-REC-QUERY
+  §3.1).
 - stoma adapter `rec_axis_fill_tokens` + ranker `stoma_rank`: implemented
   (site `external/stoma`).
 - semantic (libsepal) adapter: implemented — `sepal_fill_approx` (streams
@@ -240,8 +261,29 @@ returns zero matches.
   ANN; embedding stays consumer-side (no `rec_embed_t` in libsepal —
   the embedding ABI question in §4.2 stays open).
 - `rec_query` engine (`rec_axis_register` / `rec_query_run` / `rec_join_t`):
-  planned — `.opencode/plans/PLAN-REC-QUERY.md` Parts 1–3. Axis libs gain
-  constructors that register; the CLI gains `-R` `dlopen` mode.
+  **done** — `.opencode/plans/PLAN-REC-QUERY.md` Parts 1–3 all landed.
+  Axis libs gain constructors that register; the CLI gains a `-Q`
+  `dlopen`-plugin recall-query mode (`qmap -Q --dl PATH --open SPEC
+  --axis N --params STR [--and|--or|--not] ... --combine MODE --top K
+  --min F --list-axes`), plus a `QMAP_AXIS_LIBS` env var for auto-loading.
+  A mock two-axis plugin (`external/libqmap/src/librec_axis_mock.c`) and
+  `test-cli.sh` (wired into `make test`) smoke-test the full CLI path
+  without needing any real axis's production data. `rec_axis_open` is
+  now also implemented in all 4 real sibling libs (see the table below)
+  and verified end-to-end against `qmap -Q` with a real, file-backed
+  libsepal store (put two vectors, `--dl libsepal.so --open PATH --axis
+  0 --params 'file=... qdim=... m=... min_sim=...'` recovered both refs
+  with exact expected cosine scores 1.0/0.0, and `--min` correctly
+  filtered the low-score one out). A `bin/qsearch` site wrapper script
+  remains a deferred future workstream (no real site module writes
+  through these axes yet — PLAN-REC-QUERY §4.5).
+
+| Axis | `rec_axis_open(spec)` convention | ctx type |
+|---|---|---|
+| libjoint | `spec` = `joint_init()` filename (empty/NULL → in-memory) | `jd` (unsigned handle, widened via `uintptr_t`) |
+| libislet | `spec` = `"filename:database:mask"` (`:`-separated, any field empty → `islet_open()`'s NULL/0 default) | `uint32_t` db handle (widened via `uintptr_t`) |
+| libsepal | `spec` = `sepal_open()` fname (empty/NULL → memory-only store) | `sepal_vecstore_t *` (direct pointer) |
+| stoma | `spec` = decimal `stoma_open()` mask (empty/NULL → 0, qmap default) | `stoma_db_t *` (direct pointer) |
 
 ## Verification
 
@@ -252,7 +294,7 @@ returns zero matches.
   (intersect/union → approx + bound=min; subtract keeps left's).
 - `src/bench_rec.c` — kernel join vs hand-rolled join parity (identical
   match counts); equal/zero `qmap_next` scans on the kernel path.
-- libgeo: `test_geo_fill.c`, `test_fill_parity.c` (fill == raw collect),
+- libislet: `test_geo_fill.c`, `test_fill_parity.c` (fill == raw collect),
   `test_fill_props.c` (brute-force oracle), `bench_rec_fill.c`,
   `bench_sparse.c`.
 - stoma: `stoma_test.c` groups 30-35 (fill==query equivalence both phrase

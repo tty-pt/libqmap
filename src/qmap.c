@@ -148,7 +148,9 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <getopt.h>
 #include <ttypt/qsys.h>
+#include <ttypt/rec.h>
 
 #define DEBUG_LVL 0
 #define DEBUG(lvl, ...) \
@@ -662,9 +664,323 @@ static void s_print(const void *data) {
 	printf("%s", (char *) data);
 }
 
+/* ========================================================================
+ * -Q recall-query CLI mode (dlopen'd axis plugins) — PLAN-REC-QUERY.md §4.2
+ *
+ * Entirely separate from the flat key/value CLI above: -Q must be argv[1],
+ * every other flag here is long-only (getopt_long) and never touches
+ * `optstr`/the two-pass flat-ops getopt loop in main(). qmap/libqmap link
+ * only libqmap + libqsys; axis .so plugins are loaded via qsys_dlopen and
+ * never linked (PLAN-REC-QUERY.md §1.2 dependency invariant).
+ * ======================================================================== */
+
+#define QMAP_RQ_DEFAULT_TOP 10
+#define QMAP_RQ_ALL_TOP 65536  /* --top 0 ("all"): rec_query_run rejects
+                                 * top_k == 0 (rec_axis.c), so the CLI
+                                 * substitutes this fixed cap instead of
+                                 * calling into the kernel with 0
+                                 * (PLAN-REC-QUERY.md D18). */
+
+enum {
+	RQ_OPT_DL = 256,
+	RQ_OPT_OPEN,
+	RQ_OPT_AXIS,
+	RQ_OPT_PARAMS,
+	RQ_OPT_AND,
+	RQ_OPT_OR,
+	RQ_OPT_NOT,
+	RQ_OPT_COMBINE,
+	RQ_OPT_TOP,
+	RQ_OPT_MIN,
+	RQ_OPT_LIST_AXES,
+	RQ_OPT_HELP
+};
+
+static const struct option rq_long_opts[] = {
+	{ "dl",        required_argument, NULL, RQ_OPT_DL },
+	{ "open",      required_argument, NULL, RQ_OPT_OPEN },
+	{ "axis",      required_argument, NULL, RQ_OPT_AXIS },
+	{ "params",    required_argument, NULL, RQ_OPT_PARAMS },
+	{ "and",       no_argument,       NULL, RQ_OPT_AND },
+	{ "or",        no_argument,       NULL, RQ_OPT_OR },
+	{ "not",       no_argument,       NULL, RQ_OPT_NOT },
+	{ "combine",   required_argument, NULL, RQ_OPT_COMBINE },
+	{ "top",       required_argument, NULL, RQ_OPT_TOP },
+	{ "min",       required_argument, NULL, RQ_OPT_MIN },
+	{ "list-axes", no_argument,       NULL, RQ_OPT_LIST_AXES },
+	{ "help",      no_argument,       NULL, RQ_OPT_HELP },
+	{ NULL, 0, NULL, 0 }
+};
+
+static void
+qmap_rq_usage(const char *prog)
+{
+	fprintf(stderr, "Usage: %s -Q [--dl PATH [--open SPEC]]...\n", prog);
+	fprintf(stderr, "          [[--and|--or|--not] --axis SLOT [--params STRING]]...\n");
+	fprintf(stderr, "          [--combine and|or|not] [--top N] [--min SCORE] [--list-axes]\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "    -Q must be the first argument. Loads axis plugin .so files via\n");
+	fprintf(stderr, "    dlopen (never linked into qmap itself), builds a query from the\n");
+	fprintf(stderr, "    --axis/--params/--and/--or/--not flags, and runs it.\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "        --dl PATH        dlopen an axis plugin .so (repeatable)\n");
+	fprintf(stderr, "        --open SPEC      call the .so just loaded by --dl's rec_axis_open(SPEC)\n");
+	fprintf(stderr, "                         (if exported) and bind the result via rec_axis_set_ctx()\n");
+	fprintf(stderr, "        --axis SLOT      add a registered axis slot to the query (repeatable)\n");
+	fprintf(stderr, "        --params STRING  decode STRING via the axis's decode fn (or pass raw\n");
+	fprintf(stderr, "                         if it has none); binds to the --axis just given\n");
+	fprintf(stderr, "        --and/--or/--not sticky join for the NEXT --axis (ignored on the seed)\n");
+	fprintf(stderr, "        --combine MODE   and|or|not: overrides every per-axis join after the seed\n");
+	fprintf(stderr, "        --top N          max results (default %d; 0 = all, capped at %d)\n",
+			QMAP_RQ_DEFAULT_TOP, QMAP_RQ_ALL_TOP);
+	fprintf(stderr, "        --min SCORE      minimum score floor (default 0.0)\n");
+	fprintf(stderr, "        --list-axes      print registered axes (slot/name/fill/rank/ctx) and exit\n");
+	fprintf(stderr, "\n");
+	fprintf(stderr, "    QMAP_AXIS_LIBS env var: colon-separated .so paths dlopen'd before flag\n");
+	fprintf(stderr, "    parsing (dlopen-only, no ctx binding — useful for --list-axes discovery).\n");
+}
+
+static rec_join_t
+qmap_rq_parse_join(const char *s, const char *flag)
+{
+	if (!strcmp(s, "and")) return REC_JOIN_AND;
+	if (!strcmp(s, "or")) return REC_JOIN_OR;
+	if (!strcmp(s, "not")) return REC_JOIN_NOT;
+	fprintf(stderr, "-Q: invalid %s value '%s' (want and|or|not)\n", flag, s);
+	exit(EXIT_FAILURE);
+}
+
+static void
+qmap_rq_dlopen_env_one(const char *path)
+{
+	void *handle = qsys_dlopen(path, 0);
+	if (!handle) {
+		const char *err = qsys_dlerror();
+		fprintf(stderr, "-Q: QMAP_AXIS_LIBS %s failed: %s\n",
+				path, err ? err : "unknown error");
+	}
+}
+
+/* Parses -Q's flags (argv/argc are main()'s original, unshifted arguments;
+ * argv[1] == "-Q"). Runs entirely on getopt_long/long-only state, indepen-
+ * dent of the flat-ops getopt loop below. */
+static int
+qmap_recall_query(int argc, char *argv[])
+{
+	rec_query_t q;
+	memset(&q, 0, sizeof(q));
+	q.top_k = QMAP_RQ_DEFAULT_TOP;
+
+	rec_join_t pending_join = REC_JOIN_AND;
+	int have_pending_join = 0;
+	void *last_dl_handle = NULL;
+	int last_dl_slot_before = 0;
+	int have_last_dl = 0;
+	int last_axis_idx = -1;
+	int list_axes = 0;
+
+	const char *env_libs = getenv("QMAP_AXIS_LIBS");
+	if (env_libs && *env_libs) {
+		char *copy = strdup(env_libs);
+		if (!copy) {
+			fprintf(stderr, "-Q: out of memory\n");
+			return EXIT_FAILURE;
+		}
+		char *save = NULL;
+		for (char *tok = strtok_r(copy, ":", &save); tok;
+				tok = strtok_r(NULL, ":", &save))
+			qmap_rq_dlopen_env_one(tok);
+		free(copy);
+	}
+
+	optind = 2; /* skip argv[0] (prog) and argv[1] ("-Q") */
+	int ch, option_index;
+	while ((ch = getopt_long(argc, argv, "", rq_long_opts, &option_index)) != -1) {
+		(void) option_index;
+		switch (ch) {
+		case RQ_OPT_DL:
+			last_dl_slot_before = rec_axis_count();
+			last_dl_handle = qsys_dlopen(optarg, 0);
+			if (!last_dl_handle) {
+				const char *err = qsys_dlerror();
+				fprintf(stderr, "-Q: --dl %s failed: %s\n",
+						optarg, err ? err : "unknown error");
+				have_last_dl = 0;
+				break;
+			}
+			have_last_dl = 1;
+			break;
+		case RQ_OPT_OPEN: {
+			if (!have_last_dl) {
+				fprintf(stderr, "-Q: --open with no preceding successful --dl, ignoring\n");
+				break;
+			}
+			int slot_after = rec_axis_count();
+			int n_new = slot_after - last_dl_slot_before;
+			if (n_new < 1) {
+				fprintf(stderr, "-Q: --open: plugin registered no axis, cannot bind ctx\n");
+				break;
+			}
+			if (n_new > 1)
+				fprintf(stderr,
+					"-Q: --open: plugin registered %d axes; binding to the last one only\n",
+					n_new);
+			int new_slot = slot_after - 1;
+			void *sym = qsys_dlsym(last_dl_handle, "rec_axis_open");
+			if (!sym) {
+				fprintf(stderr,
+					"-Q: --open: plugin has no rec_axis_open symbol, axis %d left ctx-less\n",
+					new_slot);
+				break;
+			}
+			void *(*open_fn)(const char *);
+			memcpy(&open_fn, &sym, sizeof(open_fn));
+			void *ctx = open_fn(optarg);
+			rec_axis_set_ctx(new_slot, ctx);
+			break;
+		}
+		case RQ_OPT_AXIS: {
+			if (q.n_axes >= REC_QUERY_MAX_AXES) {
+				fprintf(stderr, "-Q: too many --axis (max %d)\n", REC_QUERY_MAX_AXES);
+				return EXIT_FAILURE;
+			}
+			char *end;
+			long slot = strtol(optarg, &end, 10);
+			if (*end != '\0' || slot < 0 || slot >= REC_QUERY_MAX_AXES) {
+				fprintf(stderr, "-Q: invalid --axis slot '%s'\n", optarg);
+				return EXIT_FAILURE;
+			}
+			last_axis_idx = q.n_axes;
+			q.axes[last_axis_idx].slot = (int) slot;
+			q.axes[last_axis_idx].params = NULL;
+			q.axes[last_axis_idx].join = have_pending_join ? pending_join : REC_JOIN_AND;
+			q.n_axes++;
+			have_pending_join = 0;
+			break;
+		}
+		case RQ_OPT_PARAMS: {
+			if (last_axis_idx < 0) {
+				fprintf(stderr, "-Q: --params with no preceding --axis, ignoring\n");
+				break;
+			}
+			int slot = q.axes[last_axis_idx].slot;
+			void *decoded = rec_axis_decode(slot, optarg);
+			q.axes[last_axis_idx].params = decoded ? decoded : (void *) optarg;
+			break;
+		}
+		case RQ_OPT_AND:
+			pending_join = REC_JOIN_AND;
+			have_pending_join = 1;
+			break;
+		case RQ_OPT_OR:
+			pending_join = REC_JOIN_OR;
+			have_pending_join = 1;
+			break;
+		case RQ_OPT_NOT:
+			pending_join = REC_JOIN_NOT;
+			have_pending_join = 1;
+			break;
+		case RQ_OPT_COMBINE:
+			q.combine = qmap_rq_parse_join(optarg, "--combine");
+			break;
+		case RQ_OPT_TOP: {
+			char *end;
+			long top = strtol(optarg, &end, 10);
+			if (*end != '\0' || top < 0) {
+				fprintf(stderr, "-Q: invalid --top value '%s'\n", optarg);
+				return EXIT_FAILURE;
+			}
+			q.top_k = top == 0 ? QMAP_RQ_ALL_TOP : (size_t) top;
+			break;
+		}
+		case RQ_OPT_MIN: {
+			char *end;
+			float min = strtof(optarg, &end);
+			if (end == optarg) {
+				fprintf(stderr, "-Q: invalid --min value '%s'\n", optarg);
+				return EXIT_FAILURE;
+			}
+			q.min_score = min;
+			break;
+		}
+		case RQ_OPT_LIST_AXES:
+			list_axes = 1;
+			break;
+		case RQ_OPT_HELP:
+			qmap_rq_usage(argv[0]);
+			return EXIT_SUCCESS;
+		default:
+			qmap_rq_usage(argv[0]);
+			return EXIT_FAILURE;
+		}
+	}
+
+	if (list_axes) {
+		int n = rec_axis_count();
+		printf("slot  name              fill  rank  ctx\n");
+		for (int slot = 0; slot < n; slot++) {
+			const rec_axis_t *axis = rec_axis_get(slot);
+			if (!axis)
+				continue;
+			printf("%-4d  %-16s  %-4s  %-4s  %s\n",
+					slot, axis->name,
+					axis->fill ? "y" : "n",
+					axis->rank ? "y" : "n",
+					axis->ctx ? "y" : "n");
+		}
+		return EXIT_SUCCESS;
+	}
+
+	if (q.n_axes == 0) {
+		fprintf(stderr, "-Q: no --axis given (use --list-axes to inspect loaded plugins)\n");
+		return EXIT_FAILURE;
+	}
+
+	rec_ref_t *refs = malloc(q.top_k * sizeof(*refs));
+	float *scores = malloc(q.top_k * sizeof(*scores));
+	if (!refs || !scores) {
+		fprintf(stderr, "-Q: out of memory\n");
+		free(refs);
+		free(scores);
+		return EXIT_FAILURE;
+	}
+
+	int have_rank = 0;
+	for (int i = 0; i < q.n_axes; i++) {
+		const rec_axis_t *axis = rec_axis_get(q.axes[i].slot);
+		if (axis && axis->rank) {
+			have_rank = 1;
+			break;
+		}
+	}
+	int pure_filter = !have_rank && !q.consumer_score;
+
+	int n = rec_query_run(&q, refs, pure_filter ? NULL : scores);
+	if (n < 0) {
+		fprintf(stderr, "-Q: rec_query_run failed\n");
+		free(refs);
+		free(scores);
+		return EXIT_FAILURE;
+	}
+
+	for (int i = 0; i < n; i++) {
+		if (pure_filter)
+			printf("%llu\n", (unsigned long long) refs[i]);
+		else
+			printf("%llu %f\n", (unsigned long long) refs[i], scores[i]);
+	}
+
+	free(refs);
+	free(scores);
+	return EXIT_SUCCESS;
+}
+
 int
 main(int argc, char *argv[])
 {
+	if (argc >= 2 && !strcmp(argv[1], "-Q"))
+		return qmap_recall_query(argc, argv);
+
 	static char *optstr = "kxla:q:p:d:D:g:m:c:rR:L:?";
 	char *fname = NULL, ch;
 	uint32_t flags = QH_RDONLY, aux;
