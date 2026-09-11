@@ -125,6 +125,101 @@ void rec_rank_free(rec_rank_t *rk);
 
 /** @} */
 
+/** @defgroup rec_axis Pluggable axis registry + query engine
+ *  @{
+ */
+
+/** Maximum concurrently registered axes in the registry. */
+#define REC_QUERY_MAX_AXES 8
+
+/** Fill dispatch compatible with the rec_axis_fill_* adapter shape: stream
+ *  the refs matching (ctx, params) into `out` and seal it. 0 ok / -1 error. */
+typedef int (*rec_fill_fn)(void *ctx, void *params, rec_set_t *out);
+
+/** Rank one ref from the filled set: write the score, return 0 (nonzero
+ *  skips the ref). */
+typedef int (*rec_rank_fn)(void *ctx, void *params, rec_ref_t ref,
+                           float *score);
+
+/** A registered axis. `name` is introspection only (never interpreted);
+ *  `params` structs are axis-owned; `ctx` is NULL until rec_axis_set_ctx. */
+typedef struct rec_axis {
+	char     name[16];  /**< introspection only; never interpreted */
+	rec_fill_fn fill;   /**< NULL allowed (rank-only axis) */
+	rec_rank_fn rank;   /**< NULL allowed (filter-only axis) */
+	void    *ctx;       /**< NULL until rec_axis_set_ctx() */
+	void   *(*decode)(const char *s); /**< optional opaque param parser */
+} rec_axis_t;
+
+/** One axis's score for a ref, fed to the consumer score fn. */
+typedef struct rec_axis_score {
+	int   slot;
+	float score;
+	int   valid;        /**< 0 if no rank fn or rank skipped the ref */
+} rec_axis_score_t;
+
+/** Consumer score fn: combine the per-axis scores (all axes in query order,
+ *  regardless of join — weights are the consumer's job) into out_score.
+ *  Return 0 to admit the ref into the ranking buffer. */
+typedef int (*rec_consumer_score_fn)(
+	void *ud, rec_ref_t ref,
+	const rec_axis_score_t *as, int n_as, float *out_score);
+
+/** Boolean join between an axis fill and the running query result. */
+typedef enum {
+	REC_JOIN_AND = 0,   /**< intersect with the running set (default) */
+	REC_JOIN_OR  = 1,   /**< union with the running set */
+	REC_JOIN_NOT = 2    /**< subtract from the running set */
+} rec_join_t;
+
+/** One axis in a query: slot + opaque params (axis owns the struct) + join. */
+typedef struct rec_query_axis {
+	int        slot;
+	void      *params;
+	rec_join_t join;    /**< ignored for the first axis (it seeds) */
+} rec_query_axis_t;
+
+/** A full multi-axis query. */
+typedef struct rec_query {
+	int                   n_axes;   /**< 0..REC_QUERY_MAX_AXES */
+	rec_join_t            combine;  /**< global shorthand for axes > seed;
+	                                 REC_JOIN_AND (0) = honor per-axis join */
+	rec_query_axis_t      axes[REC_QUERY_MAX_AXES];
+	size_t                top_k;
+	float                 min_score;
+	rec_consumer_score_fn consumer_score; /**< NULL → first rank-capable axis */
+	void                 *consumer_ud;
+} rec_query_t;
+
+/** Register an axis (copied). Returns its slot 0..REC_QUERY_MAX_AXES-1,
+ *  or -1 when the registry is full or `axis` is NULL. */
+int rec_axis_register(const rec_axis_t *axis);
+
+/** Look up a registered axis; NULL when the slot is invalid. */
+const rec_axis_t *rec_axis_get(int slot);
+
+/** Decode an opaque param string via the axis's decode fn (NULL when the
+ *  axis has none, the slot is invalid, or s is NULL). */
+void *rec_axis_decode(int slot, const char *s);
+
+/** Two-phase init: drop the store handle into a registered slot. */
+int rec_axis_set_ctx(int slot, void *ctx);
+
+/** Number of currently registered axes. */
+int rec_axis_count(void);
+
+/** Run a query: fill each axis, fold the sets into the running result
+ *  (first filled axis seeds R; AND → intersect, OR → union, NOT → subtract
+ *  left-to-right; q.combine != REC_JOIN_AND overrides the per-axis join for
+ *  all axes after the seed), then rank. `refs` must be sized ≥ top_k (or ≥
+ *  the result count in pure-filter mode); `scores` may be NULL in
+ *  pure-filter mode (no axis has a rank fn and no consumer is set). Returns
+ *  the number of results, 0 when nothing matched, -1 on invalid input or
+ *  allocation failure. Re-entrant; no global scratch. */
+int rec_query_run(const rec_query_t *q, rec_ref_t *refs, float *scores);
+
+/** @} */
+
 #ifdef __cplusplus
 }
 #endif
