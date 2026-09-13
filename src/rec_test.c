@@ -190,7 +190,7 @@ static void
 test_fill_qmap_iter_multivalue(void)
 {
 	printf("=== 1A fill_qmap_iter duplicates ===\n");
-	uint32_t kt = qmap_reg(sizeof(uint64_t));
+	uint32_t kt = qmap_reg(sizeof(uint32_t));
 	uint32_t hd = qmap_open(NULL, NULL, kt, kt, 0xFF, QM_SORTED | QM_MULTIVALUE);
 	rec_ref_t r = 7;
 	qmap_put(hd, &r, &r);

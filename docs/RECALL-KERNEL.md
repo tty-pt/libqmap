@@ -1,7 +1,7 @@
 # The Recall Kernel — `rec.h`
 
-A domain-free **"filter by axis → join → rank"** loop over uniform 64-bit
-refs. The kernel lives in this library (`include/ttypt/rec.h`,
+A domain-free **"filter by axis → join → rank"** loop over uniform 32-bit
+qmap refs. The kernel lives in this library (`include/ttypt/rec.h`,
 `src/rec.c`). It knows nothing about time, space, text, or meaning: it
 collects refs, combines candidate sets, and keeps the best-ranked results.
 Axis libraries stay independent domain stores and feed the kernel through
@@ -48,7 +48,8 @@ rec_rank_sorted(board, best_refs, best_scores);    /* best first */
 
 ### Candidate sets — `rec_set_t`
 
-An arena-backed list of `rec_ref_t` (uint64). Append with `rec_set_push`,
+An arena-backed list of `rec_ref_t` (uint32 — a qmap ref, never an axis's
+own internal key). Append with `rec_set_push`,
 then **seal** (sort + dedup) before any join; joins are sorted **merge-joins
 — no hashing** and produce sealed output.
 
@@ -65,7 +66,7 @@ rec_set_free(s);
 ```
 
 A push **unseals** the set — append more and seal again. Any qmap sorted
-handle with fixed-length keys ≤ 8 bytes can be drained directly with
+handle with fixed-length keys ≤ 4 bytes can be drained directly with
 `rec_set_fill_qmap_iter(s, hd)`.
 
 ### Ranking buffers — `rec_rank_t`
@@ -150,8 +151,8 @@ final recall by the approximate one — `m` is the visible knob.
 The `rec_query` engine is the composition layer the kernel's pattern implies.
 It is a registry-driven query running wholly inside libqmap with **zero axis
 dependencies**: integer slots, opaque `void*` params and ctx, and a name
-string used for introspection only. See `.opencode/plans/PLAN-REC-QUERY.md`
-for the full design.
+string used for introspection only. See `mm-plan/PHASE-2-CLI.md` (site repo)
+for how this composes into the general qmap CLI surface.
 
 ### The axis object
 
@@ -250,8 +251,7 @@ and headers returns zero matches.
 - libislet adapter `rec_axis_fill_bbox`: implemented (libislet branch
   `kernel`).
 - libjoint adapter `rec_axis_fill_interval`: implemented (libjoint branch
-  `kernel`, via the libjoint `rec_axis_t` registration — PLAN-REC-QUERY
-  §3.1).
+  `kernel`, via the libjoint `rec_axis_t` registration).
 - stoma adapter `rec_axis_fill_tokens` + ranker `stoma_rank`: implemented
   (site `external/stoma`).
 - semantic (libsepal) adapter: implemented — `sepal_fill_approx` (streams
@@ -261,7 +261,7 @@ and headers returns zero matches.
   ANN; embedding stays consumer-side (no `rec_embed_t` in libsepal —
   the embedding ABI question in §4.2 stays open).
 - `rec_query` engine (`rec_axis_register` / `rec_query_run` / `rec_join_t`):
-  **done** — `.opencode/plans/PLAN-REC-QUERY.md` Parts 1–3 all landed.
+  **done** — registry-driven query composition landed.
   Axis libs gain constructors that register; the CLI gains a `-Q`
   `dlopen`-plugin recall-query mode (`qmap -Q --dl PATH --open SPEC
   --axis N --params STR [--and|--or|--not] ... --combine MODE --top K
@@ -276,7 +276,7 @@ and headers returns zero matches.
   with exact expected cosine scores 1.0/0.0, and `--min` correctly
   filtered the low-score one out). A `bin/qsearch` site wrapper script
   remains a deferred future workstream (no real site module writes
-  through these axes yet — PLAN-REC-QUERY §4.5).
+  through these axes yet).
 
 | Axis | `rec_axis_open(spec)` convention | ctx type |
 |---|---|---|

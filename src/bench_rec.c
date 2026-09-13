@@ -41,7 +41,7 @@ main(void)
 	double tk = now_sec() - t0;
 
 	/* hand-rolled path: QM_SORTED maps, iterate A + qmap_get in B */
-	uint32_t kt = qmap_reg(sizeof(uint64_t));
+	uint32_t kt = qmap_reg(sizeof(rec_ref_t));
 	uint32_t hda = qmap_open(NULL, NULL, kt, kt, 0xFFFF, QM_SORTED);
 	uint32_t hdb = qmap_open(NULL, NULL, kt, kt, 0xFFFF, QM_SORTED);
 	const rec_ref_t *aa = rec_set_at(a), *ba = rec_set_at(b);
