@@ -1,7 +1,8 @@
-/* librec_axis_mock.c — mock rec_axis plugin for the -Q CLI smoke test
- * (PLAN-REC-QUERY.md §4.4, Part 3.4). Registers TWO axes in one
+/* librec_axis_mock.c — mock rec_axis plugin (retired with the old
+ * recall-query CLI mode in 2B-3; kept built but unused by test-cli.sh, which now exercises the
+ * functional librec_axis_fold plugin instead). Registers TWO axes in one
  * constructor — "mock_a" (fill+rank+decode) and "mock_b" (fill-only, no
- * rank, no decode) — so a single `--dl` brings in both halves of an
+ * rank, no decode) — so a single dlopen brings in both halves of an
  * AND/OR/NOT composition test.
  *
  * (Deliberately one plugin with two axes, not two plugins: `dlopen` caches
@@ -17,21 +18,142 @@
  *
  * Built as a loadable .so (Makefile's `all` list, name starts with "lib" so
  * the shared LIB build rule picks it up) but NEVER linked into qmap/libqmap
- * themselves — dlopen'd only by test-cli.sh via `qmap -Q --dl ...`. Mirrors
+ * themselves — dlopen'd only by axis consumers via QMAP_AXIS_LIBS. Mirrors
  * the shape a real axis library's registration constructor would have
- * (see PLAN-REC-QUERY.md §3's four sibling axis libraries) except for the
- * two-axes-in-one-constructor deviation explained above, which is purely a
- * test-plugin convenience, not a convention real axis libs should follow.
+ * (see the recall-query plan doc §3's four sibling axis libraries) except
+ * for the two-axes-in-one-constructor deviation explained above, which is
+ * purely a test-plugin convenience, not a convention real axis libs follow.
  */
 #include <ttypt/rec.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+/* Store/unstore/get backing store: per-axis in-memory ref → value entries.
+ * Mirrors the shape a real axis's store would have (ref-indexed, idempotent
+ * unstore, malloc'd read-back on get) — the mock proves the plugin
+ * convention (2A-mock) without any real axis library. */
+typedef struct {
+	rec_ref_t ref;
+	char     *value;
+} mock_entry_t;
+
+typedef struct {
+	mock_entry_t *entries;
+	size_t        n, cap;
+} mock_store_t;
+
 typedef struct {
 	rec_ref_t *refs;
 	size_t n;
+	mock_store_t store;
 } mock_ctx_t;
+
+static int
+store_append(mock_store_t *st, rec_ref_t ref, const char *value)
+{
+	mock_entry_t *e;
+	size_t i;
+
+	if (st->n == st->cap) {
+		size_t ncap = st->cap ? st->cap * 2 : 4;
+		mock_entry_t *grown = realloc(st->entries, ncap * sizeof(*st->entries));
+		if (!grown)
+			return -1;
+		st->entries = grown;
+		st->cap = ncap;
+	}
+	/* Same-ref put replaces in place (matches sepal / qmap semantics). */
+	for (i = 0; i < st->n; i++)
+		if (st->entries[i].ref == ref) {
+			char *copy = strdup(value);
+			if (!copy)
+				return -1;
+			free(st->entries[i].value);
+			st->entries[i].value = copy;
+			return 0;
+		}
+	e = &st->entries[st->n++];
+	e->ref = ref;
+	e->value = strdup(value);
+	return e->value ? 0 : -1;
+}
+
+static int
+store_remove(mock_store_t *st, rec_ref_t ref)
+{
+	size_t i;
+
+	for (i = 0; i < st->n; i++)
+		if (st->entries[i].ref == ref) {
+			free(st->entries[i].value);
+			st->entries[i] = st->entries[--st->n];
+			return 0;
+		}
+	return 0;
+}
+
+static const char *
+store_find(mock_store_t *st, rec_ref_t ref)
+{
+	size_t i;
+
+	for (i = 0; i < st->n; i++)
+		if (st->entries[i].ref == ref)
+			return st->entries[i].value;
+	return NULL;
+}
+
+/* ── rec_axis_store / rec_axis_unstore / rec_axis_readback conventional
+ *    exports (2A-mock / PHASE-2-CLI.md §2A contract; optional, CLI-specific,
+ *    dlsym'd like rec_axis_open — never declared or called by libqmap). The
+ *    mock stores the whole `value` string verbatim per (axis, ref). Read-back
+ *    is rec_axis_readback: rec_axis_get(int) is the kernel registry lookup. */
+
+int
+rec_axis_store(void *ctx, const char *spec, rec_ref_t ref, const char *value)
+{
+	mock_ctx_t *c = ctx;
+	(void) spec;
+	if (!c || !value)
+		return -1;
+	return store_append(&c->store, ref, value);
+}
+
+int
+rec_axis_unstore(void *ctx, rec_ref_t ref)
+{
+	mock_ctx_t *c = ctx;
+	if (!c)
+		return -1;
+	return store_remove(&c->store, ref);
+}
+
+int
+rec_axis_readback(void *ctx, rec_ref_t ref, char **blob_out, size_t *n_out)
+{
+	mock_ctx_t *c = ctx;
+	const char *v;
+	char *copy;
+
+	if (blob_out)
+		*blob_out = NULL;
+	if (n_out)
+		*n_out = 0;
+	if (!c)
+		return -1;
+	v = store_find(&c->store, ref);
+	if (!v)
+		return 0;
+	copy = strdup(v);
+	if (!copy)
+		return -1;
+	if (blob_out)
+		*blob_out = copy;
+	if (n_out)
+		*n_out = strlen(copy);
+	return 0;
+}
 
 static int mock_a_slot = -1;
 static int mock_b_slot = -1;
@@ -59,8 +181,8 @@ mock_a_rank(void *ctx, void *params, rec_ref_t ref, float *score)
 }
 
 /* No query-time params needed by this mock; pass the raw string straight
- * through so the CLI's --params plumbing has something non-NULL to forward
- * (exercises the "decode present, params forwarded" path in qmap.c). */
+ * through so an axis consumer's decode path has something non-NULL to
+ * forward (exercises the "decode present, params forwarded" path). */
 static void *
 mock_a_decode(const char *s)
 {
@@ -130,7 +252,7 @@ parse_refs(const char *s)
 	}
 	free(copy);
 
-	mock_ctx_t *ctx = malloc(sizeof(*ctx));
+	mock_ctx_t *ctx = calloc(1, sizeof(*ctx));
 	if (!ctx) {
 		free(refs);
 		return NULL;
@@ -140,7 +262,7 @@ parse_refs(const char *s)
 	return ctx;
 }
 
-/* rec_axis_open convention (PLAN-REC-QUERY.md §4.3 / D14): spec is
+/* rec_axis_open convention: spec is
  * "a=1,2,3:b=2,3,4" — one ref list per axis this plugin owns, separated by
  * ':'. Binds mock_a's ctx directly via rec_axis_set_ctx() (this plugin
  * knows its own slot from mock_init()'s rec_axis_register() return value)

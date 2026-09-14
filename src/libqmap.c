@@ -862,6 +862,51 @@ qmap_open(const char *filename,
   /* Strip record bits so _qmap_open doesn't see them */
   flags &= ~(QM_RECORD_MASK | QM_RECORD_FLAG);
 
+  /* 2B-5 (F4): opening the same (file, map) twice with the same key/value
+   * shape must alias the LIVE handle, not orphan it. The old path below
+   * registered the new handle in qmap_dbs_hd and marked the old one dead
+   * (mdbs[old]=0), so the second handle's as-of-open copy won the
+   * exit-save — e.g. libstoma's sidecar-scan mirror-open of the primary
+   * the CLI already held silently dropped -p seeds and -d forgets.
+   * Shape match = same record type, key/value types, and table mask
+   * (normalized like _qmap_open does). Membership in the file's ids proves
+   * the handle is still live (qmap_close removes it there). */
+  if (filename && database) {
+    char abuf[strlen(filename)
+      + strlen(database) + 2];
+
+    snprintf(abuf, sizeof(abuf), "%s/%s",
+        filename, database);
+
+    const uint32_t *eahd = qmap_get(qmap_dbs_hd, abuf);
+    uint32_t ahd = eahd ? *eahd : QM_MISS;
+    if (ahd != QM_MISS && mdbs[ahd]) {
+      const qmap_file_t *afile
+        = qmap_get(qmap_files_hd, filename);
+      idsi_t *acur;
+      uint32_t ah;
+      int live = 0;
+
+      if (afile) {
+        acur = (idsi_t *) ids_iter((ids_t *) &afile->ids);
+        while (ids_next(&ah, &acur))
+          if (ah == ahd) {
+            live = 1;
+            break;
+          }
+      }
+      if (live) {
+        qmap_head_t *ahead = &qmap_heads[ahd];
+        uint32_t amask = mask ? mask : QM_DEFAULT_MASK;
+        if (ahead->record_id == record_id
+            && ahead->types[QM_KEY] == ktype
+            && ahead->types[QM_VALUE] == vtype
+            && ahead->mask == amask)
+          return ahd;
+      }
+    }
+  }
+
   uint32_t hd = _qmap_open(ktype, vtype, mask, flags);
 
   /* Check if open failed */

@@ -122,8 +122,9 @@ qmap_drop(by_time);
 
 ## Recall Kernel (`rec.h`)
 
-A domain-free **"filter by axis → join → rank"** loop over uniform 64-bit
-refs (`rec_ref_t`). Axis libraries (libit time, libgeo space, stoma text)
+A domain-free **"filter by axis → join → rank"** loop over uniform 32-bit
+refs (`rec_ref_t` = `uint32_t`, a qmap auto-index ref). Axis libraries
+(libjoint time, libislet space, stoma text, libsepal meaning)
 stay independent domain stores and feed the kernel through small adapters;
 consumers compose axes without re-writing join/rank code. Optional and
 additive — raw entry points are untouched. Spec and design:
@@ -135,8 +136,8 @@ additive — raw entry points are untouched. Spec and design:
 rec_set_t  *cands = rec_set_new();
 rec_rank_t *board = rec_rank_new(10, 0.4f);   /* top-k, min-score */
 
-rec_axis_fill_bbox(geo_db, s, l, 3, cands);   /* space axis (libgeo)   */
-rec_axis_fill_interval(it_db, a, b, cands);   /* time axis (libit)     */
+rec_axis_fill_bbox(...);                      /* space axis (libislet) */
+rec_axis_fill_interval(...);                  /* time axis (libjoint)  */
 /* cands == in-box AND in-interval refs, sorted, deduped.              */
 
 for (size_t i = 0; i < rec_set_count(cands); i++) {
