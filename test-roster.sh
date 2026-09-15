@@ -93,7 +93,7 @@ assert_ok "unknown-name-nonzero" "1" "$exit_code"
 # ── 7: alongside-heuristic — axis store exists but no roster yet ──
 echo "=== 7: alongside-heuristic ==="
 primary_h="$td2/hint.db"
-touch "$td2/stub.db"
+touch "$td2/hint.db-stub"
 hint_err=""
 "$qmap" --list-axes "$primary_h@stub:a:s" 2>"$td2/hint.err" >/dev/null
 hint_err=$(cat < "$td2/hint.err")
@@ -106,6 +106,25 @@ primary2="$td2/ql.db"
 "$qmap" -p 1:x "$primary2@mock_b:a:s" >/dev/null 2>&1 || true
 axes=$("$qmap" --list-axes "$primary2:a:s" 2>/dev/null) || true
 assert_contains "env-libs-resolve" "mock_b" "$axes"
+unset QMAP_AXIS_LIBS
+
+# ── 8: per-primary axis isolation (7-AXIS-NAMESPACE-PLAN.md) — two DBs in
+# one directory each own their axis stores; fan-out stays per-primary ──
+echo "=== 8: per-primary axis stores (two DBs in one dir) ==="
+export QMAP_AXIS_LIBS="$PWD/lib/librec_axis_fold.so"
+"$qmap" -p 1:from_a "$td/wa.db@alpha:a:s" >/dev/null 2>&1
+"$qmap" -p 1:from_b "$td/wb.db@alpha:a:s" >/dev/null 2>&1
+if [ -e "$td/wa.db-alpha" ] && [ -e "$td/wb.db-alpha" ] \
+		&& [ "$td/wa.db-alpha" != "$td/wb.db-alpha" ]; then
+	echo "ok - per-primary-files-distinct"
+else
+	echo "FAIL - per-primary-files-distinct"
+	fail=1
+fi
+out=$("$qmap" -X alpha -g . "$td/wa.db:a:s" 2>/dev/null)
+assert_eq "isolation-a" "1 1.000000 from_a" "$out"
+out=$("$qmap" -X alpha -g . "$td/wb.db:a:s" 2>/dev/null)
+assert_eq "isolation-b" "1 1.000000 from_b" "$out"
 unset QMAP_AXIS_LIBS
 
 # ── 6: zero overhead — classic invocations unchanged ──

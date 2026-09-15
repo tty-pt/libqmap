@@ -885,7 +885,8 @@ uint32_t gen_open(char *fname, uint32_t flags) {
  * Inter-pass (after primary open, before pass-2 ops): reconcile the
  * explicit @ roster / stored sidecar roster, load the load set
  * (@ or stored ∪ QMAP_AXIS_LIBS), and bind each axis's ctx via its
- * rec_axis_open on the alongside-default spec <primary-dir>/<name>.db.
+ * rec_axis_open on the alongside-default spec <primary-dir>/<primary>-<name>
+ * (per-primary, 7-AXIS-NAMESPACE-PLAN.md).
  * ======================================================================== */
 
 /* One dlopen'd plugin: the inclusive registry slot range it contributed,
@@ -961,14 +962,22 @@ qmap_axes_find_lib(const char *name, char *out, size_t cap)
 	return 0;
 }
 
-/* Alongside-default spec (D9): <primary-dir>/<name>.db. */
+/* Per-primary alongside-default spec (7-AXIS-NAMESPACE-PLAN.md A-1): each
+ * axis store is keyed to the primary that owns it — <dir>/<basename>-<name>
+ * (e.g. "data/garden.db" → "data/garden.db-sepal"), mirroring the
+ * <primary>.roster sidecar's per-primary shape. Two databases sharing a
+ * directory therefore never share axis state. */
 static void
 qmap_axes_spec(const char *name, char *out, size_t cap)
 {
-	char tmp[BUFSIZ];
-	snprintf(tmp, sizeof(tmp), "%s", qmap_path);
-	char *dir = dirname(tmp);
-	snprintf(out, cap, "%s/%s.db", dir, name);
+	char dirbuf[BUFSIZ];
+	char basebuf[BUFSIZ];
+	char *sl;
+	snprintf(dirbuf, sizeof(dirbuf), "%s", qmap_path);
+	snprintf(basebuf, sizeof(basebuf), "%s", qmap_path);
+	sl = strrchr(basebuf, '/');
+	snprintf(out, cap, "%s/%s-%s",
+			dirname(dirbuf), sl ? sl + 1 : basebuf, name);
 }
 
 /* ── 2B-4 write-fan-out state: per-slot store capability (dlsym'd at
@@ -1086,6 +1095,13 @@ static void
 qmap_axes_setup(void)
 {
 	char sidecar[BUFSIZ + 16];
+
+	/* Per-primary binding (7-AXIS-NAMESPACE-PLAN.md A-2): publish the
+	 * primary path verbatim before any axis binds. A derived axis (stoma)
+	 * rebuilds from EXACTLY this primary — the live handle, never a
+	 * directory-guessed roster — so two DBs in one dir can't cross-wire. */
+	setenv("QMAP_AXIS_PRIMARY", qmap_path, 1);
+
 	snprintf(sidecar, sizeof(sidecar), "%s.roster", qmap_path);
 	struct stat st;
 	int have_sidecar = stat(sidecar, &st) == 0;

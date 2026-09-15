@@ -114,7 +114,7 @@ echo "=== seeding (explicit refs 1/2/3 into primary + axes) ==="
         -p 3:"2026-09-14T12:00:00:Beacon Harbor lights" \
         "$td/greps.db:a:s" >/dev/null
 "$qmap" -p 1:plain -p 2:records "$td/fresh.db:a:s" >/dev/null
-"$td/real_seed" "$axis_path" "$td" 2>"$td/seed.err" || { cat "$td/seed.err"; echo "FAIL - seeding"; exit 1; }
+"$td/real_seed" "$axis_path" "$td/greps.db" 2>"$td/seed.err" || { cat "$td/seed.err"; echo "FAIL - seeding"; exit 1; }
 echo "ok - seeded"
 
 qvec="$td/q.vec"

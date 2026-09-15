@@ -20,13 +20,19 @@
  * (the sepal leaf reads a qvec file), so the test script builds its `-X`
  * leaf uniformly as `file=q.vec qdim=$(cat q.dim) m=… min_sim=…`.
  *
- * Usage: real_seed <axis-dir1:axis-dir2:...> <primary-dir>
+*  Usage: real_seed <axis-dir1:axis-dir2:...> <primary-path>
+ *
+ *  Primary-path is the CLI's primary FILE (dir + basename, e.g.
+ *  "$td/greps.db"); q.vec/q.dim are written beside it. Axis specs are
+ *  per-primary (7-AXIS-NAMESPACE-PLAN.md): <dir>/<basename>-<axis>, so
+ *  seeding matches what the CLI binds for THIS primary exactly.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <libgen.h>
 #include <dlfcn.h>
 
 typedef uint32_t rec_ref_t;
@@ -122,8 +128,9 @@ static void write_dim(const char *path, size_t n)
 
 int main(int argc, char **argv)
 {
-	const char *pathdirs, *dir;
+	const char *pathdirs, *primary;
 	const char *url, *model, *key;
+	char dir[4096], base[4096], head[4096];
 	int embed;
 	char spec[4096], qvec[4096], qdim[4096];
 	struct axis joint = { "joint" };
@@ -156,11 +163,23 @@ int main(int argc, char **argv)
 
 	if (argc != 3) {
 		fprintf(stderr,
-		        "usage: real_seed <axis-dirs> <primary-dir>\n");
+		        "usage: real_seed <axis-dirs> <primary-path>\n");
 		return 2;
 	}
 	pathdirs = argv[1];
-	dir = argv[2];
+	primary = argv[2];
+
+	/* Derive <dir> and <basename> from the primary path so axis specs
+	 * match what the CLI binds for exactly this primary. */
+	{
+		char dpath[4096], bpath[4096], *sl;
+
+		snprintf(dpath, sizeof(dpath), "%s", primary);
+		snprintf(bpath, sizeof(bpath), "%s", primary);
+		sl = strrchr(bpath, '/');
+		snprintf(base, sizeof(base), "%s", sl ? sl + 1 : bpath);
+		snprintf(dir, sizeof(dir), "%s", dirname(dpath));
+	}
 
 	url = getenv("QMAP_SEPAL_EMBED_URL");
 	model = getenv("QMAP_SEPAL_EMBED_MODEL");
@@ -207,11 +226,11 @@ int main(int argc, char **argv)
 		(void)init(NULL);
 	}
 
-	snprintf(spec, sizeof(spec), "%s/joint.db", dir);
+	snprintf(spec, sizeof(spec), "%s/%s-joint", dir, base);
 	axis_open(&joint, spec);
-	snprintf(spec, sizeof(spec), "%s/islet.db", dir);
+	snprintf(spec, sizeof(spec), "%s/%s-islet", dir, base);
 	axis_open(&islet, spec);
-	snprintf(spec, sizeof(spec), "%s/sepal.db", dir);
+	snprintf(spec, sizeof(spec), "%s/%s-sepal", dir, base);
 	axis_open(&sepal, spec);
 
 	snprintf(qvec, sizeof(qvec), "%s/q.vec", dir);

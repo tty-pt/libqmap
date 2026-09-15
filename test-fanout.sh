@@ -71,11 +71,13 @@ export QMAP_AXIS_LIBS=$PWD/$fold:$PWD/$plain
 export QMAP_AXIS_PATH=./lib
 
 echo "=== string fan-out verbatim (:a:s) ==="
+# Specs are per-primary (7-AXIS-NAMESPACE-PLAN.md): the axis store for a
+# primary P is <dir>/<basename(P)>-<axis>.
 "$qmap" -p 1:hello -p 2:world "$td/demo.db@alpha,beta:a:s" >/dev/null
-out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/alpha.db" 1 2)
+out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/demo.db-alpha" 1 2)
 assert_eq "alpha-stash-verbatim" "1:hello
 2:world" "$out"
-out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/beta.db" 1 2)
+out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/demo.db-beta" 1 2)
 assert_eq "beta-stash-verbatim" "1:hello
 2:world" "$out"
 
@@ -85,25 +87,25 @@ assert_eq "x-answers-writes" "2 2.000000 world
 1 1.000000 hello" "$out"
 
 echo "=== reopen: stash persisted ==="
-out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/alpha.db" 1 2)
+out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/demo.db-alpha" 1 2)
 assert_eq "stash-persisted" "1:hello
 2:world" "$out"
 
 echo "=== auto-ref put fans out (fresh db: auto refs are positions) ==="
 out=$("$qmap" -p auto_value "$td/auto.db@alpha:a:s")
 assert_eq "auto-ref-id" "0" "$out"
-out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/alpha.db" 0)
+out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/auto.db-alpha" 0)
 assert_eq "auto-ref-stash" "0:auto_value" "$out"
 
 echo "=== typed dispatch on :a:u (typed symbol ran) ==="
 "$qmap" -p 9:whatever "$td/num.db@alpha:a:u" >/dev/null
 g=$("$td/fanout_verify" pu32 "$td/num.db" 9)
-out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/alpha.db" 9)
+out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/num.db-alpha" 9)
 assert_eq "typed-dispatch" "9:T:$g" "$out"
 
 echo "=== text-only path (:a:s -> string symbol) ==="
 "$qmap" -p 7:chars "$td/m.db@plain:a:s" >/dev/null
-out=$("$td/fanout_verify" readback "$PWD/$plain" "$td/plain.db" 7)
+out=$("$td/fanout_verify" readback "$PWD/$plain" "$td/m.db-plain" 7)
 assert_eq "text-verbatim" "7:chars" "$out"
 
 echo "=== binary payload + text-only axis: loud skip, no store ==="
@@ -118,7 +120,7 @@ else
 	echo "  stderr: $(cat "$td/textonly.err" | tr '\n' '|')"
 	fail=1
 fi
-out=$("$td/fanout_verify" readback "$PWD/$plain" "$td/plain.db" 8)
+out=$("$td/fanout_verify" readback "$PWD/$plain" "$td/u.db-plain" 8)
 assert_eq "textonly-unstored" "8:" "$out"
 
 echo "=== named forget (-d NAME via reverse view) ==="
@@ -126,9 +128,9 @@ echo "=== named forget (-d NAME via reverse view) ==="
 assert_ok "named-forget-exit" "0" "$?"
 out=$("$qmap" -g . "$td/demo.db:a:s")
 assert_eq "named-forget-primary" "2" "$out"
-out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/alpha.db" 1)
+out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/demo.db-alpha" 1)
 assert_eq "named-forget-alpha" "1:" "$out"
-out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/beta.db" 1)
+out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/demo.db-beta" 1)
 assert_eq "named-forget-beta" "1:" "$out"
 
 echo "=== forget (-d REF) + idempotent re-run ==="
@@ -136,7 +138,7 @@ echo "=== forget (-d REF) + idempotent re-run ==="
 assert_ok "forget-exit" "0" "$?"
 out=$("$qmap" -g . "$td/demo.db:a:s")
 assert_eq "forget-primary" "-1" "$out"
-out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/alpha.db" 2)
+out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/demo.db-alpha" 2)
 assert_eq "forget-alpha" "2:" "$out"
 "$qmap" -d 2 "$td/demo.db@alpha,beta:a:s"
 assert_ok "forget-idempotent" "0" "$?"
@@ -147,7 +149,7 @@ echo "=== -D collapses to unstore on axes ==="
 assert_ok "forget-all-exit" "0" "$?"
 out=$("$qmap" -g . "$td/demo.db:a:s")
 assert_eq "forget-all-primary" "-1" "$out"
-out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/alpha.db" 4)
+out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/demo.db-alpha" 4)
 assert_eq "forget-all-alpha" "4:" "$out"
 
 echo "=== loud partials: read-only target (no store symbol) ==="
@@ -163,7 +165,7 @@ else
 	echo "  stderr: $(cat "$td/mix.err" | tr '\n' '|')"
 	fail=1
 fi
-out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/alpha.db" 3)
+out=$("$td/fanout_verify" readback "$PWD/$fold" "$td/demo2.db-alpha" 3)
 assert_eq "mixed-partial-attempted" "3:three" "$out"
 exit_code=0
 "$qmap" -p 4:four "$td/demo2.db@alpha,stub:a:s" >/dev/null 2>&1 \
