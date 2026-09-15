@@ -48,11 +48,13 @@ assert_fails() {
 }
 
 echo "=== seeding (envs clean) ==="
+# Axis fills are per-primary (7-AXIS-NAMESPACE-PLAN.md): each is seeded as
+# the primary-owned alongside store <primary>-<axis>, e.g. demo.db-alpha.
 "$qmap" -p 1:one -p 2:two -p 3:three -p 4:four "$td/demo.db:a:s" >/dev/null
 "$qmap" -p 1:r "$td/roster.db:a:s" >/dev/null
-"$qmap" -p 1:1 -p 2:2 -p 3:3 "$td/alpha.db:a:u" >/dev/null
-"$qmap" -p 2:2 -p 3:3 -p 4:4 "$td/beta.db:a:u" >/dev/null
-"$qmap" -p 1:1 -p 2:2 "$td/pure.db:a:u" >/dev/null
+"$qmap" -p 1:1 -p 2:2 -p 3:3 "$td/demo.db-alpha:a:u" >/dev/null
+"$qmap" -p 2:2 -p 3:3 -p 4:4 "$td/demo.db-beta:a:u" >/dev/null
+"$qmap" -p 1:1 -p 2:2 "$td/demo.db-pure:a:u" >/dev/null
 
 export QMAP_AXIS_LIBS=$PWD/$fold
 export QMAP_AXIS_PATH=./lib

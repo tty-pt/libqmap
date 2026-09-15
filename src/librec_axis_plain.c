@@ -4,7 +4,7 @@
  * `rec_axis_store` but NO `rec_axis_store_typed` — the CLI's typed
  * dispatch (D12) must therefore fall back to the string symbol on binary
  * primaries (text-only axis).  The stash is file-backed
- * (`<dir>/plain.wr`, HNDL→string), so the gate's dlopen-based verifier
+ * (`<dir>/<primary>-plain.wr`, HNDL→string), so the gate's dlopen-based verifier
  * can read back cross-process what the CLI fan-out stored. */
 #include <ttypt/rec.h>
 #include <ttypt/qmap.h>
@@ -103,7 +103,7 @@ static void plain_init(void)
 }
 
 /* rec_axis_open convention: alongside-default spec
- * <primary-dir>/plain.db; the stash is the same base with .wr. "hd"
+ * <primary-dir>/<primary>-plain; the stash is the same base with .wr. "hd"
  * database + CLI mask (qmap namespaces by dbid = XXH32(database)). */
 void *
 rec_axis_open(const char *spec)

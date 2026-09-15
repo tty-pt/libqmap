@@ -1,13 +1,14 @@
 /* librec_axis_fold.c — functional axis plugin for the 2B-3/-X/-g . test
  * matrix (alpha/beta/pure over real qmap a:u stores) and the 2B-4 write-
  * fan-out gate.  Registers three axes in one constructor:
- *   alpha  { fill, rank }    → refs from alpha.db keys ∪ alpha stash
- *   beta   { fill, rank }    → refs from beta.db keys ∪ beta stash
- *   pure   { fill, NULL }    → refs from pure.db keys ∪ pure stash
+ *   alpha  { fill, rank }    → refs from alpha fill keys ∪ alpha stash
+ *   beta   { fill, rank }    → refs from beta fill keys ∪ beta stash
+ *   pure   { fill, NULL }    → refs from pure fill keys ∪ pure stash
  *
  * Each axis owns TWO alongside stores (fold_ctx_t): `fill` (read-only,
- * the `<dir>/<name>.db` a:u store the CLI seeds — the -X fill source) and
- * `stash` (`<dir>/<name>.wr`, HNDL→string, the 2B-4 write-fan-out target).
+ * the `<dir>/<primary>-<name>` a:u store the CLI seeds — the -X fill
+ * source) and `stash` (`<dir>/<primary>-<name>.wr`, HNDL→string, the
+ * 2B-4 write-fan-out target).
  * fill = union of both handles' refs; rank = score = ref; decode = NULL
  * (whole-string VALUE forwarded).  Same multi-axis-one-so pattern as
  * librec_axis_mock.c (works around the shared mk LIB-obj-y aggregation
@@ -35,8 +36,8 @@
 #include <string.h>
 
 typedef struct {
-	uint32_t fill;   /* alongside <dir>/<name>.db : read-only a:u ref set */
-	uint32_t stash;  /* alongside <dir>/<name>.wr : HNDL→string write stash */
+	uint32_t fill;   /* alongside <dir>/<primary>-<name> : read-only a:u ref set */
+	uint32_t stash;  /* alongside <dir>/<primary>-<name>.wr : HNDL→string write stash */
 } fold_ctx_t;
 
 /* Default hash mask (D11): power-of-two-minus-one bucket hint, auto-grow
@@ -171,9 +172,9 @@ static void fold_init(void)
 	(void) fold_pure_slot;
 }
 
-/* rec_axis_open convention: alongside-default spec <primary-dir>/<name>.db,
+/* rec_axis_open convention: alongside-default spec <primary-dir>/<primary>-<name>,
  * qmap a:u store (fill side, CLI mask derivation). The stash
- * <primary-dir>/<name>.wr is derived beside it.
+ * <primary-dir>/<primary>-<name>.wr is derived beside it.
  *
  * Database name MUST be "hd" with the CLI mask: qmap files namespace
  * records by dbid = XXH32(database) and the CLI seeds axis stores via
@@ -194,7 +195,8 @@ rec_axis_open(const char *spec)
 	c->fill = qmap_open(spec, "hd", QM_HNDL, QM_U32,
 			fold_mask(), QM_AINDEX);
 
-	/* <dir>/<name>.db → <dir>/<name>.wr (same base, record store). */
+	/* <dir>/<primary>-<name> → <dir>/<primary>-<name>.wr (same base).
+	 * The ends-in-.db spelling is legacy (pre-per-primary stores). */
 	n = strlen(spec);
 	if (n >= 3 && !strcmp(spec + n - 3, ".db"))
 		snprintf(wr, sizeof(wr), "%.*s.wr", (int)(n - 3), spec);

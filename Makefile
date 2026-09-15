@@ -57,7 +57,14 @@ lib/librec_axis_fold.${SO}: src/librec_axis_fold.c lib/libqmap.${SO} lib
 lib/librec_axis_plain.${SO}: src/librec_axis_plain.c lib/libqmap.${SO} lib
 	${cc} ${CFLAGS} ${CFLAGS-LIB} -shared -o $@ src/librec_axis_plain.c ${LDFLAGS} ${LDLIBS-librec_axis_fold}
 
-all: lib/librec_axis_mock.${SO} lib/libstub.${SO} lib/libzed.${SO} lib/librec_axis_fold.${SO} lib/librec_axis_plain.${SO}
+# L1 short-circuit probe (AXIS-EFF plan / test-shortcircuit.sh): one-axis
+# plugin whose decode emits a stderr marker for "boom" and whose fill
+# empties on "empty" — the black-box observation point for empty-branch
+# skipping. Same standalone-rule pattern as the mock/plain plugins.
+lib/librec_axis_probe.${SO}: src/librec_axis_probe.c lib/libqmap.${SO} lib
+	${cc} ${CFLAGS} ${CFLAGS-LIB} -shared -o $@ src/librec_axis_probe.c ${LDFLAGS} ${LDLIBS-librec_axis_fold}
+
+all: lib/librec_axis_mock.${SO} lib/libstub.${SO} lib/libzed.${SO} lib/librec_axis_fold.${SO} lib/librec_axis_plain.${SO} lib/librec_axis_probe.${SO}
 
 test: all
 	./test.sh
@@ -66,6 +73,7 @@ test: all
 	./test-fanout.sh
 	./test-real.sh
 	./test-mm.sh
+	./test-shortcircuit.sh
 
 bench: all
 	LD_LIBRARY_PATH=./lib ./bin/bench_multivalue

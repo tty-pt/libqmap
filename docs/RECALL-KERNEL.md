@@ -224,7 +224,8 @@ which opens whatever store the axis needs from an opaque spec string (a
 path, a `path:opts` string, several `key=val` sub-specs joined by a
 delimiter — entirely the axis's own business) and returns the ctx pointer
 a consumer then passes to `rec_axis_set_ctx()`. **Persistence is axis-decided
-(D13):** `spec` names the *logical* axis (`<primary-dir>/<name>.db`); an
+(D13):** `spec` names the *logical* axis (`<primary-dir>/<primary>-<name>`,
+e.g. `garden.db-joint` for `garden.db`); an
 axis that is derived rebuilds from the primary at each open (e.g. `stoma`,
 optionally `joint`/`islet`), a persisted one uses the file (`sepal` always).
 Fanout in 2B-4 writes to whatever `ctx` the bound axis represents. The mask
@@ -235,7 +236,7 @@ registry API — libqmap never declares, exports, or calls `rec_axis_open`
 itself; it is purely a naming convention a `dlopen`-based consumer (the
 composed qmap CLI) relies on to bind a freshly-loaded axis without
 per-axis-specific glue code: the CLI hands each axis an **alongside-default
-spec** derived from the primary store's location (`<primary-dir>/<name>.db`,
+spec** derived from the primary store's location (`<primary-dir>/<primary>-<name>`,
 or the axis's own memory/empty-field defaults — the axis table below) and
 the axis's opener interprets it in its own grammar. There is **no per-call
 load/open flag** — no `--dl`, no `--open`; discovery is by name only. Keeps
@@ -488,7 +489,7 @@ and headers returns zero matches.
 | libjoint | `spec` = `joint_init()` filename (empty/NULL → in-memory) | `jd` (unsigned handle, widened via `uintptr_t`) | either (file or derived rebuild; D13) |
 | libislet | `spec` = `"filename:database:mask"` (`:`-separated, any field empty → `islet_open()`'s NULL/0 default) | `uint32_t` db handle (widened via `uintptr_t`) | either (file+`.ridx` or derived; D13) |
 | libsepal | `spec` = `sepal_open()` fname (empty/NULL → memory-only store) | `sepal_vecstore_t *` (direct pointer) | file-backed |
-| stoma | `spec` = decimal `stoma_open()` mask **or** `<dir>/<name>.db` path (sidecar-scan rebuild, 2B-2) | `stoma_db_t *` (direct pointer) | derived (memory+rebuild) |
+| stoma | `spec` = decimal `stoma_open()` mask **or** `<dir>/<primary>-stoma` path (per-primary rebuild — `QMAP_AXIS_PRIMARY` first, else the single-roster scan; 2B-2) | `stoma_db_t *` (direct pointer) | derived (memory+rebuild) |
 
 ## Verification
 
