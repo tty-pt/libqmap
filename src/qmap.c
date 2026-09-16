@@ -278,12 +278,108 @@ static void *ranker_params;
 #define CLIP_OPT_LIST_AXES 256
 #define CLIP_OPT_TOP       257
 #define CLIP_OPT_BOTTOM    258
+#define CLIP_OPT_PLUGIN    259
 static const struct option cli_long_opts[] = {
 	{ "list-axes", no_argument,       NULL, CLIP_OPT_LIST_AXES },
 	{ "top",       required_argument, NULL, CLIP_OPT_TOP },
 	{ "bottom",    required_argument, NULL, CLIP_OPT_BOTTOM },
 	{ NULL, 0, NULL, 0 }
 };
+
+/* ── axis-contributed CLI options: qmap stays axis-agnostic — each bound
+ *    plugin may DECLARE extra long options via rec_axis_cli_options() and
+ *    receive their inline `--name=value` tokens via rec_axis_config_arg().
+ *    Generic names are broadcast to every bound .so that declares them.
+ *    An unknown long option would otherwise hit `case '?'` (usage + exit 0),
+ *    so pre-pass-1 we collect `--name[=value]` tokens by mirroring getopt's
+ *    consumption of the FIXED core surface and feed BOTH getopt passes a
+ *    dynamic table (optional_argument, shared val CLIP_OPT_PLUGIN) — libc-
+ *    portable, keeps `-?`/`-Z` semantics byte-identical. Values point into
+ *    argv (stable for the whole run). ── */
+typedef struct rec_axis_cli_option {
+	const char *name;
+	int has_arg;
+	const char *help;
+} rec_axis_cli_option_t;
+
+#define QMAP_CLI_PLUGIN_CAP 16
+#define QMAP_CLI_PLUGIN_NAME_MAX 63
+#define QMAP_CLI_PLUGIN_OPTS_MAX 8
+static char qmap_cli_pname[QMAP_CLI_PLUGIN_CAP][QMAP_CLI_PLUGIN_NAME_MAX];
+static const char *qmap_cli_pval[QMAP_CLI_PLUGIN_CAP];
+static int qmap_cli_pn;
+static struct option qmap_cli_plugin_opts[3 + 1 + QMAP_CLI_PLUGIN_CAP + 1];
+static const char *qmap_cli_prog;
+
+/* Mirror getopt_long's consumption of the fixed surface on the UNPERMUTED
+ * argv: arg-taking shorts (from optstr "kxla:q:p:d:D:g:m:c:rR:L:X:t:b:?": a q
+ * p d D g m R X t b), the three core longs (list-axes no-arg; top/bottom take
+ * an arg), "--" termination, and bundle rest-of-token args. Everything else
+ * that still looks like `--name[=value]` is a plugin candidate. Order = argv
+ * order (duplicates resolve last-wins at flush). */
+static void
+qmap_cli_plugin_collect(int argc, char **argv)
+{
+	const char *need_arg = "aqpdDgmRXtb";
+
+	for (int i = 1; i < argc; i++) {
+		char *a = argv[i];
+		if (!strcmp(a, "--"))
+			break;
+		if (a[0] != '-' || a[1] == '\0')
+			continue;   /* positional */
+		if (a[1] == '-') {
+			char *name = a + 2;
+			char *eq = strchr(name, '=');
+			size_t nl = eq ? (size_t)(eq - name) : strlen(name);
+			if (nl == 0 || nl > QMAP_CLI_PLUGIN_NAME_MAX)
+				continue;
+			if (nl == 9 && !strncmp(name, "list-axes", 9))
+				continue;                       /* core long, no arg */
+			if ((nl == 3 && !strncmp(name, "top", 3))
+					|| (nl == 6 && !strncmp(name, "bottom", 6))) {
+				i++;                            /* plus its arg */
+				continue;
+			}
+			if (qmap_cli_pn >= QMAP_CLI_PLUGIN_CAP) {
+				fprintf(stderr, "qmap: too many plugin options "
+						"(max %d)\n", QMAP_CLI_PLUGIN_CAP);
+				exit(EXIT_FAILURE);
+			}
+			char *pname = qmap_cli_pname[qmap_cli_pn];
+			memcpy(pname, name, nl);
+			pname[nl] = '\0';
+			qmap_cli_pval[qmap_cli_pn] = eq ? eq + 1 : NULL;
+			qmap_cli_pn++;
+			continue;
+		}
+		/* short bundle: walk chars; first arg-taking char consumes the
+		 * rest of the token (in-token arg) or the next token. */
+		int j;
+		for (j = 1; a[j]; j++)
+			if (strchr(need_arg, a[j]))
+				break;
+		if (a[j] && a[j + 1] == '\0')
+			i++;        /* arg-taking char at end: next token is its arg */
+	}
+}
+
+static const struct option *
+qmap_cli_plugin_table(void)
+{
+	int n = 0;
+	qmap_cli_plugin_opts[n++] = cli_long_opts[0];
+	qmap_cli_plugin_opts[n++] = cli_long_opts[1];
+	qmap_cli_plugin_opts[n++] = cli_long_opts[2];
+	for (int i = 0; i < qmap_cli_pn; i++)
+		qmap_cli_plugin_opts[n++] = (struct option){
+			.name = qmap_cli_pname[i],
+			.has_arg = optional_argument,
+			.flag = NULL,
+			.val = CLIP_OPT_PLUGIN };
+	qmap_cli_plugin_opts[n++] = (struct option){ NULL, 0, NULL, 0 };
+	return qmap_cli_plugin_opts;
+}
 
 uint32_t qmap_get_type;
 const void **qmap_get_ptr;
@@ -322,6 +418,8 @@ usage(char *prog)
 	fprintf(stderr, "                         quote values containing operator words\n");
 	fprintf(stderr, "        -t N             cap result count (0 = all)\n");
 	fprintf(stderr, "        -b F             score floor\n");
+	fprintf(stderr, "        --NAME=VALUE     per-axis config; forwarded to every bound\n");
+	fprintf(stderr, "                         axis plugin that declares NAME\n");
 	fprintf(stderr, "        --list-axes      list loaded axes and exit\n");
 	fprintf(stderr, "    'k' and 'v' are key and value types. Supported values:\n");
 	fprintf(stderr, "         u               uint32_t\n");
@@ -1087,6 +1185,88 @@ qmap_axes_dlopen_env(int quiet)
 	free(copy);
 }
 
+/* Post-bind broadcast (D14): after every axis is connected, deliver each
+ * collected plugin option to every bound .so that DECLARES it (self-
+ * describing via rec_axis_cli_options). Runs before pass-2 eval so an
+ * axis's decode/fill merges the CLI config. An axis declaring nothing is
+ * untouched; an option no bound .so declares is a hard error. */
+static void
+qmap_cli_plugin_flush(void)
+{
+	struct {
+		void *h;
+		const rec_axis_cli_option_t *opts;
+		int (*cfg)(const char *, const char *);
+	} plugs[QMAP_CLI_PLUGIN_CAP];
+	int nplug = 0;
+
+	if (qmap_cli_pn == 0)
+		return;
+
+	/* Dedupe by handle: one .so may register several axes. */
+	for (int i = 0; i < qmap_loaded_n && nplug < QMAP_CLI_PLUGIN_CAP; i++) {
+		void *h = qmap_loaded_slots[i].h;
+		int dup = 0;
+		for (int j = 0; j < nplug; j++)
+			if (plugs[j].h == h) { dup = 1; break; }
+		if (dup)
+			continue;
+		void *osym = qsys_dlsym(h, "rec_axis_cli_options");
+		if (!osym)
+			continue;
+		const rec_axis_cli_option_t *(*opts_fn)(void);
+		memcpy(&opts_fn, &osym, sizeof(opts_fn));
+		void *cfg_sym = qsys_dlsym(h, "rec_axis_config_arg");
+		if (!cfg_sym)
+			continue;
+		int (*cfg)(const char *, const char *);
+		memcpy(&cfg, &cfg_sym, sizeof(cfg));
+		plugs[nplug].h = h;
+		plugs[nplug].opts = opts_fn();
+		plugs[nplug].cfg = cfg;
+		nplug++;
+	}
+
+	for (int c = 0; c < qmap_cli_pn; c++) {
+		const char *name = qmap_cli_pname[c];
+		const char *value = qmap_cli_pval[c];
+		int found = 0;
+		for (int p = 0; p < nplug; p++) {
+			const rec_axis_cli_option_t *o = plugs[p].opts;
+			for (int k = 0; o[k].name && k < QMAP_CLI_PLUGIN_OPTS_MAX; k++) {
+				if (strcmp(o[k].name, name))
+					continue;
+				found = 1;
+				if (o[k].has_arg && !value) {
+					fprintf(stderr,
+						"qmap: option '--%s' requires --%s=VALUE\n",
+						name, name);
+					usage((char *) qmap_cli_prog);
+					exit(EXIT_FAILURE);
+				}
+				if (!o[k].has_arg && value) {
+					fprintf(stderr,
+						"qmap: option '--%s' takes no value\n", name);
+					usage((char *) qmap_cli_prog);
+					exit(EXIT_FAILURE);
+				}
+				if (plugs[p].cfg(name, value) != 0) {
+					fprintf(stderr,
+						"qmap: option '--%s' rejected by axis plugin\n",
+						name);
+					usage((char *) qmap_cli_prog);
+					exit(EXIT_FAILURE);
+				}
+			}
+		}
+		if (!found) {
+			fprintf(stderr, "qmap: unknown option '--%s'\n", name);
+			usage((char *) qmap_cli_prog);
+			exit(EXIT_FAILURE);
+		}
+	}
+}
+
 /* Inter-pass roster handling + axis load/bind. PHASE-2-CLI.md "the @
  * roster" / 2B-1: write-if-absent, override-once (D7), alongside-
  * heuristic, load set = explicit @ (or stored roster) ∪ QMAP_AXIS_LIBS
@@ -1194,6 +1374,11 @@ qmap_axes_setup(void)
 		if (!axis || !axis->ctx)
 			qmap_axes_bind(slot, name);
 	}
+
+	/* D14: after ALL binds, broadcast the collected plugin options.
+	 * Plugin flags on a --list-axes no-file run are silently ignored
+	 * (setup is never reached). */
+	qmap_cli_plugin_flush();
 }
 
 /* `--list-axes` render (header + slot/name/fill/rank/ctx rows; PHASE-2-CLI
@@ -1874,6 +2059,10 @@ main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
+	qmap_cli_prog = *argv;
+	qmap_cli_plugin_collect(argc, argv);
+	const struct option *opts = qmap_cli_plugin_table();
+
 	types[QM_HNDL].print = u_print;
 	types[QM_STR].print = s_print;
 	types[QM_U32].print = u_print;
@@ -1886,7 +2075,7 @@ main(int argc, char *argv[])
 			QM_HNDL, QM_HNDL,
 			QDBE_QMASK, QM_AINDEX);
 
-	while ((ch = getopt_long(argc, argv, optstr, cli_long_opts, NULL)) != -1)
+	while ((ch = getopt_long(argc, argv, optstr, opts, NULL)) != -1)
 		switch (ch) {
 		case 'a':
 			aux_hd = gen_open(optarg, QH_RDONLY);
@@ -1952,7 +2141,8 @@ main(int argc, char *argv[])
 	case 'm':
 	case 'c':
 	case 'r': break;
-		default: usage(*argv); return EXIT_FAILURE;
+		case CLIP_OPT_PLUGIN: break;    /* collected plugin option: handled post-bind */
+		default: break;
 		case '?': usage(*argv); return EXIT_SUCCESS;
 		}
 
@@ -1980,7 +2170,7 @@ main(int argc, char *argv[])
 		return EXIT_SUCCESS;
 	}
 
-	while ((ch = getopt_long(argc, argv, optstr, cli_long_opts, NULL)) != -1) switch (ch) {
+	while ((ch = getopt_long(argc, argv, optstr, opts, NULL)) != -1) switch (ch) {
 	case 'R': gen_rand(); break;
 	case 'L': gen_list_missing(); break;
 	case 'l': gen_list(); break;
@@ -1998,7 +2188,7 @@ main(int argc, char *argv[])
 	case 'r': reverse = !reverse; break;
 	case 'X': case 't': case 'b': break;
 	case CLIP_OPT_TOP: case CLIP_OPT_BOTTOM: break;
-	case CLIP_OPT_LIST_AXES: break;
+	case CLIP_OPT_LIST_AXES: case CLIP_OPT_PLUGIN: break;
 	}
 	return rc;
 }

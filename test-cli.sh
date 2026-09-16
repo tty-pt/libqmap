@@ -212,6 +212,86 @@ expected="4 4.000000 four
 1 1.000000 one"
 assert_eq "top-zero" "$expected" "$out"
 
+echo "=== plugin CLI option broadcast: alpha AND beta both receive --query ==="
+out=$("$qmap" -X "alpha AND beta" -g . --query=hello "$td/demo.db:a:s" 2>"$td/cli-err")
+expected="3 3.000000 three
+2 2.000000 two"
+assert_eq "cli-query-broadcast-out" "$expected" "$out"
+if grep -q "fold alpha query=hello verbose=0" "$td/cli-err" \
+		&& grep -q "fold beta query=hello verbose=0" "$td/cli-err"; then
+	echo "ok - cli-query-broadcast-err"
+else
+	echo "FAIL - cli-query-broadcast-err"
+	echo "  stderr: $(cat "$td/cli-err")"
+	fail=1
+fi
+
+echo "=== plugin option value reaches fill: last occurrence wins ==="
+out=$("$qmap" -X alpha -g . --query=one --query=two "$td/demo.db:a:s" 2>"$td/cli-err2")
+if grep -q "fold alpha query=two verbose=0" "$td/cli-err2"; then
+	echo "ok - cli-query-last-wins"
+else
+	echo "FAIL - cli-query-last-wins"
+	echo "  stderr: $(cat "$td/cli-err2")"
+	fail=1
+fi
+
+echo "=== plugin option with no --query run: no broadcast side-channel ==="
+out=$("$qmap" -X alpha -g . "$td/demo.db:a:s" 2>"$td/cli-err3")
+if ! grep -q "fold " "$td/cli-err3"; then
+	echo "ok - cli-no-opt-silent"
+else
+	echo "FAIL - cli-no-opt-silent"
+	echo "  stderr: $(cat "$td/cli-err3")"
+	fail=1
+fi
+
+echo "=== bare flag --verbose accepted ==="
+out=$("$qmap" -X alpha -g . --verbose "$td/demo.db:a:s" 2>"$td/cli-err4")
+if grep -q "fold alpha query=(null) verbose=1" "$td/cli-err4"; then
+	echo "ok - cli-bare-flag"
+else
+	echo "FAIL - cli-bare-flag"
+	echo "  stderr: $(cat "$td/cli-err4")"
+	fail=1
+fi
+
+echo "=== unknown long option: named error, exit 1 ==="
+assert_fails "cli-unknown-opt" "unknown option '--nope'" -X alpha -g . --nope=1 "$td/demo.db:a:s"
+
+echo "=== bare --query (no =): requires --query=VALUE, exit 1 ==="
+assert_fails "cli-bare-query" "requires --query=VALUE" -X alpha -g . --query "$td/demo.db:a:s"
+
+echo "=== --verbose=1 on a bare-flag option: takes no value, exit 1 ==="
+assert_fails "cli-verbose-val" "takes no value" -X alpha -g . --verbose=1 "$td/demo.db:a:s"
+
+echo "=== >16 plugin options: too-many error, exit 1 ==="
+many=""
+i=0
+while [ "$i" -lt 17 ]; do many="$many --nope$i=1"; i=$((i + 1)); done
+assert_fails "cli-too-many" "too many plugin options" -X alpha -g . $many "$td/demo.db:a:s"
+
+echo "=== -? still prints usage, exit 0 ==="
+if "$qmap" -? >/dev/null 2>"$td/help-err"; then
+	if grep -q "Usage:" "$td/help-err"; then
+		echo "ok - dash-q-help"
+	else
+		echo "FAIL - dash-q-help (usage missing)"
+		fail=1
+	fi
+else
+	echo "FAIL - dash-q-help (expected exit 0)"
+	fail=1
+fi
+
+echo "=== -Z still unknown short: usage, exit 0 (unchanged) ==="
+if "$qmap" -Z "$td/demo.db:a:s" >/dev/null 2>"$td/help-err2"; then
+	echo "ok - dash-Z-help"
+else
+	echo "FAIL - dash-Z-help (expected exit 0)"
+	fail=1
+fi
+
 echo "=== classic smoke with envs unset ==="
 # NOTE: the interleave row above persisted ref 9 into demo.db, so the
 # classic listing shows 5 refs. Pins the classic path byte-identical.

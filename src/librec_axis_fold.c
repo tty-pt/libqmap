@@ -38,7 +38,18 @@
 typedef struct {
 	uint32_t fill;   /* alongside <dir>/<primary>-<name> : read-only a:u ref set */
 	uint32_t stash;  /* alongside <dir>/<primary>-<name>.wr : HNDL→string write stash */
+	char     name[16]; /* axis name parsed from the alongside spec (side-channel) */
 } fold_ctx_t;
+
+/* ── D14 axis-contributed CLI options — dlsym'd by the qmap CLI like
+ *    rec_axis_env_config (never declared or called by libqmap): the CLI
+ *    broadcasts every collected --name=value to each bound .so that
+ *    declares the name via rec_axis_cli_options(); this plugin adopts
+ *    them into fold-level state so the -X fill path (and the test
+ *    side-channel) can observe them. ── */
+static const char *fold_cli_query;
+static int fold_cli_query_set;
+static int fold_cli_verbose;
 
 /* Default hash mask (D11): power-of-two-minus-one bucket hint, auto-grow
  * (qmap.h:172). QMAP_MASK env overrides (benches); same derivation as the
@@ -62,6 +73,13 @@ fold_fill(void *ctx, void *params, rec_set_t *out)
 	(void) params;
 	if (!c)
 		return -1;
+	/* D14 test side-channel: echoes the broadcast --query so test-cli.sh
+	 * can assert delivery + per-axis reachability on stderr without
+	 * disturbing the composed stdout. Silently absent when no plugin
+	 * option was passed. */
+	if (fold_cli_query_set && c->name[0])
+		fprintf(stderr, "fold %s query=%s verbose=%d\n",
+				c->name, fold_cli_query, fold_cli_verbose);
 	rec_set_fill_qmap_iter(out, c->fill);
 	rec_set_fill_qmap_iter(out, c->stash);
 	rec_set_seal(out);
@@ -153,6 +171,47 @@ rec_axis_readback(void *ctx, rec_ref_t ref, char **blob_out, size_t *n_out)
 	return 0;
 }
 
+/* ── D14 CLI-option convention: declared surface + per-option delivery.
+ *    Same optional dlsym pattern as rec_axis_env_config — the qmap CLI is
+ *    axis-agnostic and never declares/calls these itself. ── */
+
+struct rec_axis_cli_option {
+	const char *name;
+	int has_arg;
+	const char *help;
+};
+
+const struct rec_axis_cli_option *
+rec_axis_cli_options(void)
+{
+	static const struct rec_axis_cli_option opts[] = {
+		{ "query",   1, "broadcast full-text/embed query" },
+		{ "verbose", 0, "bare flag (broadcast)" },
+		{ NULL, 0, NULL }
+	};
+	return opts;
+}
+
+int
+rec_axis_config_arg(const char *name, const char *value)
+{
+	if (!name)
+		return -1;
+	if (!strcmp(name, "query")) {
+		if (!value)
+			return -1;
+		fold_cli_query = value;
+		fold_cli_query_set = 1;
+		return 0;
+	}
+	if (!strcmp(name, "verbose")) {
+		fold_cli_verbose = 1;
+		fold_cli_query_set = 1;  /* observable side-channel (query still NULL) */
+		return 0;
+	}
+	return -1;
+}
+
 static int fold_alpha_slot, fold_beta_slot, fold_pure_slot;
 
 __attribute__((constructor))
@@ -194,6 +253,14 @@ rec_axis_open(const char *spec)
 		return NULL;
 	c->fill = qmap_open(spec, "hd", QM_HNDL, QM_U32,
 			fold_mask(), QM_AINDEX);
+
+	/* Axis name = the alongside spec suffix after the last '-' (e.g.
+	 * "demo.db-alpha" → "alpha") for the fold_ctx side-channel. */
+	{
+		const char *last = strrchr(spec, '-');
+		if (last && last[1])
+			snprintf(c->name, sizeof(c->name), "%s", last + 1);
+	}
 
 	/* <dir>/<primary>-<name> → <dir>/<primary>-<name>.wr (same base).
 	 * The ends-in-.db spelling is legacy (pre-per-primary stores). */

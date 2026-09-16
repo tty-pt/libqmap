@@ -317,6 +317,42 @@ confirmed 2026-09-14; D11..D13 pre-2B-4):
   crosses the boundary as the record's id; internal keys never leave the
   axis.
 
+#### The `rec_axis_cli_options` / `rec_axis_config_arg` convention (optional, CLI-specific — not core API)
+
+qmap (not libqmap) lets an axis `.so` declare its own CLI long-options —
+whole-sentence or runtime values that do not belong in the `-X` expression
+structure or the roster. An axis **may** additionally export:
+
+```c
+struct rec_axis_cli_option { const char *name; int has_arg; const char *help; };
+const struct rec_axis_cli_option *rec_axis_cli_options(void);
+int rec_axis_config_arg(const char *name, const char *value);
+```
+
+(`struct option`-shaped; each side defines its own layout — the two are
+never compiled together.)
+
+Contract:
+
+- qmap collects inline `--name=value` tokens (mirror scan before getopt;
+  `-X` stays the only query *verb*), and — after every bound axis is
+  connected — broadcasts each to every loaded `.so` whose
+  `rec_axis_cli_options()` declares that name, via `rec_axis_config_arg`.
+- `rec_axis_cli_options()` returns a NULL-`name`-terminated table;
+  `has_arg` 1 = takes a value, 0 = bare flag.
+- `rec_axis_config_arg(name, value)` returns 0 on accept, −1 on reject
+  (unknown name, NULL value, bad range/format). qmap turns a reject, an
+  undeclared name, a bare `--name` for a value option, or a valued
+  `--flag=x` into usage + exit 1.
+- **Inline `--name=value` only** (no space form); max 16 collected options.
+- Precedence: **leaf spec > CLI arg > env**. Credentials stay env-only —
+  never CLI flags.
+- The axis merges the CLI state in its own decode (what it omits stays
+  omitted); a bare leaf may fall back to CLI state (e.g. bare `sepal` +
+  `--query`), or stay unsearchable (bare `stoma` stays `NULL`).
+- Same CLI↔axis-plugin convention as `rec_axis_open`/store: optional,
+  dlsym'd, libqmap holds zero axis knowledge.
+
 #### Worked example — the shape in one command
 
 ```sh
