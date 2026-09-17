@@ -754,6 +754,20 @@ qmap_rebuild_map(uint32_t hd)
   free(has_pred);
 }
 
+  /* Grow one bookkeeping array to new_m slots: realloc + fill the fresh
+ * tail. Every qmap_grow array funnels through here. */
+static void
+qchunk_grow(void **pp, uint32_t old_m, uint32_t new_m,
+    size_t esize, uint8_t fill)
+{
+  void *tmp = realloc(*pp, esize * new_m);
+  CBUG(!tmp, "qmap_grow: realloc");
+
+  *pp = tmp;
+  memset((char *)*pp + esize * old_m, fill,
+      esize * (new_m - old_m));
+}
+
   static void
 qmap_grow(uint32_t hd)
 {
@@ -765,58 +779,20 @@ qmap_grow(uint32_t hd)
   CBUG((new_m & (new_m - 1)) != 0,
       "qmap_grow: capacity not power-of-two");
 
-  void *tmp;
+  qchunk_grow((void **)&qmap->omap, old_m, new_m, sizeof(void *), 0);
+  if (qmap->table)
+    qchunk_grow((void **)&qmap->table, old_m, new_m, sizeof(void *), 0);
+  qchunk_grow((void **)&qmap->key_hashes, old_m, new_m,
+      sizeof(uint32_t), 0);
+  qchunk_grow((void **)&qmap->mv_next, old_m, new_m,
+      sizeof(uint32_t), 0xFF);
+  qchunk_grow((void **)&qmap->key_sizes, old_m, new_m, sizeof(size_t), 0);
+  qchunk_grow((void **)&qmap->val_sizes, old_m, new_m, sizeof(size_t), 0);
+  if (qmap->sorted_idx)
+    qchunk_grow((void **)&qmap->sorted_idx, old_m, new_m,
+        sizeof(uint32_t), 0xFF);
 
-  tmp = realloc(qmap->omap, sizeof(void *) * new_m);
-  CBUG(!tmp, "realloc(omap)");
-  qmap->omap = tmp;
-  memset(&qmap->omap[old_m], 0,
-      sizeof(void *) * (new_m - old_m));
-
-  if (qmap->table) {
-    tmp = realloc(qmap->table,
-        sizeof(void *) * new_m);
-
-    CBUG(!tmp, "realloc(table)");
-
-    qmap->table = tmp;
-
-    memset(&qmap->table[old_m], 0,
-        sizeof(void *) * (new_m - old_m));
-  }
-
-  tmp = realloc(qmap->key_hashes, sizeof(uint32_t) * new_m);
-  CBUG(!tmp, "realloc(key_hashes)");
-  qmap->key_hashes = tmp;
-  memset(qmap->key_hashes + old_m, 0,
-      sizeof(uint32_t) * (new_m - old_m));
-
-  tmp = realloc(qmap->mv_next, sizeof(uint32_t) * new_m);
-  CBUG(!tmp, "realloc(mv_next)");
-  qmap->mv_next = tmp;
-  memset(qmap->mv_next + old_m, 0xFF,
-      sizeof(uint32_t) * (new_m - old_m));
-
-  tmp = realloc(qmap->key_sizes, sizeof(size_t) * new_m);
-  CBUG(!tmp, "realloc(key_sizes)");
-  qmap->key_sizes = tmp;
-  memset(qmap->key_sizes + old_m, 0,
-      sizeof(size_t) * (new_m - old_m));
-
-  tmp = realloc(qmap->val_sizes, sizeof(size_t) * new_m);
-  CBUG(!tmp, "realloc(val_sizes)");
-  qmap->val_sizes = tmp;
-  memset(qmap->val_sizes + old_m, 0,
-      sizeof(size_t) * (new_m - old_m));
-
-  if (qmap->sorted_idx) {
-    tmp = realloc(qmap->sorted_idx, sizeof(uint32_t) * new_m);
-    CBUG(!tmp, "realloc(sorted_idx)");
-    qmap->sorted_idx = tmp;
-    memset(qmap->sorted_idx + old_m, 0xFF,
-        sizeof(uint32_t) * (new_m - old_m));
-  }
-
+  /* map is a full spread, not a size-up: free + fresh mask. */
   free(qmap->map);
   qmap->map = malloc(sizeof(uint32_t) * new_m);
   CBUG(!qmap->map, "malloc(map)");

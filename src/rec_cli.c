@@ -35,9 +35,10 @@ rec_cli_str_set(char **dst, const char *value)
 }
 
 int
-rec_spec_next(char **cur, char **key, char **val)
+rec_spec_scan(const char **cur, const char **key, size_t *klen,
+              const char **val, size_t *vlen, int *quoted)
 {
-	char *p, *s, *w;
+	const char *p, *s;
 
 	if (!cur || !*cur)
 		return 0;
@@ -54,54 +55,55 @@ rec_spec_next(char **cur, char **key, char **val)
 			p++;
 		if (key)
 			*key = s;
+		if (klen)
+			*klen = (size_t)(p - s);
 		if (*p == '=')
 			break;
-		/* bare token (no value): skip it and keep scanning. A plain
-		 * loop, not recursion — a spec of many bare tokens must not
-		 * cost a stack frame per token. */
-		if (*p)
+		if (*p)                 /* bare token: skip, keep scanning */
 			p++;
-		if (val)
-			*val = NULL;
 	}
-	*p = '\0';
-	p++;
+	p++;                        /* past the '=' */
+	s = p;
 	if (*p == '\'') {
 		p++;
-		s = p;                 /* value start */
-		w = p;                 /* in-place unescape cursor */
+		s = p;
 		while (*p && *p != '\'') {
 			if (*p == '\\' && p[1])
 				p++;
-			*w++ = *p++;
-		}
-		if (*p == '\'')
 			p++;
-		*w = '\0';
+		}
+		if (val)
+			*val = s;
+		if (vlen)
+			*vlen = (size_t)(p - s);
+		if (quoted)
+			*quoted = 1;
+		if (*p)                 /* past the closing quote */
+			p++;
 	} else {
-		s = p;
 		while (*p && *p != ' ' && *p != '\t')
 			p++;
-		if (*p)
-			*p++ = '\0';
+		if (val)
+			*val = s;
+		if (vlen)
+			*vlen = (size_t)(p - s);
+		if (quoted)
+			*quoted = 0;
 	}
-	if (val)
-		*val = s;
 	*cur = p;
 	return 1;
 }
-
 int
-rec_cli_int(const char *v, int *out)
+rec_cli_int_b(const char *v, const char *v_end, int *out)
 {
 	char *end = NULL;
 	long n;
 
-	if (!v || !out)
+	if (!v || !v_end || !out || v_end <= v)
 		return -1;
 	errno = 0;
 	n = strtol(v, &end, 10);
-	if (errno == ERANGE || end == v || *end != '\0' ||
+	if (errno == ERANGE || end == v || end != v_end ||
 	    n < INT_MIN || n > INT_MAX)
 		return -1;
 	*out = (int)n;
@@ -109,56 +111,110 @@ rec_cli_int(const char *v, int *out)
 }
 
 int
-rec_cli_uint(const char *v, unsigned *out)
+rec_cli_int(const char *v, int *out)
+{
+	if (!v || !out)
+		return -1;
+	return rec_cli_int_b(v, v + strlen(v), out);
+}
+
+int
+rec_cli_uint_b(const char *v, const char *v_end, unsigned *out)
 {
 	char *end = NULL;
 	unsigned long n;
 
-	if (!v || !out)
-		return -1;
-	if (v[0] == '-')
+	if (!v || !v_end || !out || v_end <= v || v[0] == '-')
 		return -1;
 	errno = 0;
 	n = strtoul(v, &end, 10);
-	if (errno == ERANGE || end == v || *end != '\0' || n > UINT_MAX)
+	if (errno == ERANGE || end == v || end != v_end || n > UINT_MAX)
 		return -1;
 	*out = (unsigned)n;
 	return 0;
 }
 
-	int
-rec_cli_size(const char *v, size_t *out)
+int
+rec_cli_uint(const char *v, unsigned *out)
+{
+	if (!v || !out)
+		return -1;
+	return rec_cli_uint_b(v, v + strlen(v), out);
+}
+
+int
+rec_cli_size_b(const char *v, const char *v_end, size_t *out)
 {
 	char *end = NULL;
 	unsigned long long n;
 
-	if (!v || !out)
-		return -1;
-	if (v[0] == '-')
+	if (!v || !v_end || !out || v_end <= v || v[0] == '-')
 		return -1;
 	errno = 0;
 	n = strtoull(v, &end, 10);
-	if (errno == ERANGE || end == v || *end != '\0' || n > SIZE_MAX)
+	if (errno == ERANGE || end == v || end != v_end || n > SIZE_MAX)
 		return -1;
 	*out = (size_t)n;
 	return 0;
 }
 
 int
-rec_cli_float(const char *v, float *out)
+rec_cli_size(const char *v, size_t *out)
+{
+	if (!v || !out)
+		return -1;
+	return rec_cli_size_b(v, v + strlen(v), out);
+}
+
+int
+rec_cli_float_b(const char *v, const char *v_end, float *out)
 {
 	char *end = NULL;
 	float f;
 
-	if (!v || !out)
+	if (!v || !v_end || !out || v_end <= v)
 		return -1;
 	errno = 0;
 	f = strtof(v, &end);
-	if (end == v || *end != '\0')
+	if (end == v || end != v_end)
 		return -1;
 	/* magnitude overflow rejects; underflow → ±0 is accepted */
 	if (errno == ERANGE && f != 0.0f)
 		return -1;
 	*out = f;
+	return 0;
+}
+
+int
+rec_cli_float(const char *v, float *out)
+{
+	if (!v || !out)
+		return -1;
+	return rec_cli_float_b(v, v + strlen(v), out);
+}
+
+int
+rec_cli_str_dup(const char *v, size_t n, int quoted, char **out)
+{
+	char *copy, *w;
+	size_t i;
+
+	if (!v || !out)
+		return -1;
+	copy = malloc(n + 1);
+	if (!copy)
+		return -1;
+	if (quoted) {
+		for (i = 0, w = copy; i < n; i++) {
+			if (v[i] == '\\' && i + 1 < n)
+				i++;
+			*w++ = v[i];
+		}
+		*w = '\0';
+	} else {
+		memcpy(copy, v, n);
+		copy[n] = '\0';
+	}
+	*out = copy;
 	return 0;
 }

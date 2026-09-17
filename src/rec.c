@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define REC_MIN_CAP 1024
+#define REC_RANK_STACK_PAIRS 1024
 
 struct rec_set {
 	rec_ref_t *a;
@@ -15,6 +16,7 @@ struct rec_set {
 	int sealed;
 	int approx;         /* REC_SET_EXACT / REC_SET_APPROX */
 	float recall_bound; /* owed recall@k (exact → 1.0) */
+	rec_ref_t inline_a[];
 };
 
 struct rec_rank {
@@ -35,9 +37,18 @@ static int
 grow(rec_set_t *s)
 {
 	size_t cap = s->cap ? s->cap * 2 : REC_MIN_CAP;
-	rec_ref_t *a = realloc(s->a, cap * sizeof(*a));
-	if (!a)
-		return -1;
+	rec_ref_t *a;
+
+	if (s->a == s->inline_a) {
+		a = malloc(cap * sizeof(*a));
+		if (!a)
+			return -1;
+		memcpy(a, s->inline_a, s->n * sizeof(*a));
+	} else {
+		a = realloc(s->a, cap * sizeof(*a));
+		if (!a)
+			return -1;
+	}
 	s->a = a;
 	s->cap = cap;
 	return 0;
@@ -46,15 +57,11 @@ grow(rec_set_t *s)
 rec_set_t *
 rec_set_new(void)
 {
-	rec_set_t *s = calloc(1, sizeof(*s));
+	rec_set_t *s = calloc(1, sizeof(*s) + REC_MIN_CAP * sizeof(*s->a));
 	if (!s)
 		return NULL;
+	s->a = s->inline_a;
 	s->cap = REC_MIN_CAP;
-	s->a = malloc(s->cap * sizeof(*s->a));
-	if (!s->a) {
-		free(s);
-		return NULL;
-	}
 	s->approx = REC_SET_EXACT;
 	s->recall_bound = 1.0f;
 	return s;
@@ -231,7 +238,10 @@ rec_set_recall_bound(const rec_set_t *s)
 void
 rec_set_free(rec_set_t *s)
 {
-	free(s->a);
+	if (!s)
+		return;
+	if (s->a != s->inline_a)
+		free(s->a);
 	free(s);
 }
 
@@ -291,21 +301,21 @@ sift_down(rec_rank_t *rk, size_t i)
 rec_rank_t *
 rec_rank_new(size_t top_k, float min_score)
 {
+	rec_rank_t *rk;
+	size_t n;
+
 	if (top_k == 0)
 		return NULL;
-	rec_rank_t *rk = calloc(1, sizeof(*rk));
+	n = top_k + 1;
+	rk = malloc(sizeof(*rk) + n * sizeof(*rk->refs) + n * sizeof(*rk->sc));
 	if (!rk)
 		return NULL;
+	rk->refs = (rec_ref_t *)((char *)rk + sizeof(*rk));
+	rk->sc = (float *)((char *)rk->refs + n * sizeof(*rk->refs));
+	rk->n = 0;
+	rk->cap = top_k;
 	rk->top_k = top_k;
 	rk->min = min_score;
-	rk->cap = top_k;
-	rk->refs = malloc((rk->cap + 1) * sizeof(*rk->refs));
-	rk->sc = malloc((rk->cap + 1) * sizeof(*rk->sc));
-	if (!rk->refs || !rk->sc) {
-		free(rk->refs);
-		free(rk);
-		return NULL;
-	}
 	return rk;
 }
 
@@ -339,29 +349,36 @@ pair_cmp(const void *x, const void *y)
 size_t
 rec_rank_sorted(const rec_rank_t *rk, rec_ref_t *refs, float *scores)
 {
+	pair_t stack[REC_RANK_STACK_PAIRS];
+	pair_t *pairs;
+	size_t i;
+
 	if (rk->n == 0)
 		return 0;
-	pair_t *pairs = malloc(rk->n * sizeof(*pairs));
-	if (!pairs)
-		return 0;
-	for (size_t i = 0; i < rk->n; i++) {
+	if (rk->n <= REC_RANK_STACK_PAIRS) {
+		pairs = stack;
+	} else {
+		pairs = malloc(rk->n * sizeof(*pairs));
+		if (!pairs)
+			return 0;
+	}
+	for (i = 0; i < rk->n; i++) {
 		pairs[i].r = rk->refs[i + 1];
 		pairs[i].s = rk->sc[i + 1];
 	}
 	qsort(pairs, rk->n, sizeof(*pairs), pair_cmp);
-	for (size_t i = 0; i < rk->n; i++) {
+	for (i = 0; i < rk->n; i++) {
 		refs[i] = pairs[i].r;
 		if (scores)
 			scores[i] = pairs[i].s;
 	}
-	free(pairs);
+	if (pairs != stack)
+		free(pairs);
 	return rk->n;
 }
 
 void
 rec_rank_free(rec_rank_t *rk)
 {
-	free(rk->refs);
-	free(rk->sc);
 	free(rk);
 }
