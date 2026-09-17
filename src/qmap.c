@@ -1256,17 +1256,24 @@ qmap_cli_opt_find(const struct qmap_cli_plug *plugs, int nplug,
  * exact historic text (the shell suites grep stderr); qmap_cli_err adds
  * usage + exit(1), qmap_cli_fail exits bare. */
 static void
+vqmap_cli_out(int show_usage, const char *fmt, va_list ap)
+{
+	fprintf(stderr, "qmap: ");
+	vfprintf(stderr, fmt, ap);
+	fputc('\n', stderr);
+	if (show_usage)
+		usage((char *)qmap_cli_prog);
+	exit(EXIT_FAILURE);
+}
+
+static void
 qmap_cli_err(const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	fprintf(stderr, "qmap: ");
-	vfprintf(stderr, fmt, ap);
+	vqmap_cli_out(1, fmt, ap);
 	va_end(ap);
-	fputc('\n', stderr);
-	usage((char *)qmap_cli_prog);
-	exit(EXIT_FAILURE);
 }
 
 static void
@@ -1275,11 +1282,8 @@ qmap_cli_fail(const char *fmt, ...)
 	va_list ap;
 
 	va_start(ap, fmt);
-	fprintf(stderr, "qmap: ");
-	vfprintf(stderr, fmt, ap);
+	vqmap_cli_out(0, fmt, ap);
 	va_end(ap);
-	fputc('\n', stderr);
-	exit(EXIT_FAILURE);
 }
 
 static void
@@ -1456,10 +1460,11 @@ qmap_apply_scoped_flags(void)
 			const char *old = n->value ? n->value : "";
 			size_t oldlen = strlen(old);
 			size_t vlen = strlen(sc->value);
-			size_t qlen = qmap_leaf_needs_quote(sc->value)
-				? qmap_leaf_quote_len(sc->value) : vlen;
+			size_t baselen = strlen(sc->base);
+			int needs_q = qmap_leaf_needs_quote(sc->value);
+			size_t qlen = needs_q ? qmap_leaf_quote_len(sc->value) : vlen;
 			size_t total = oldlen + (oldlen > 0 ? 1 : 0)
-				+ strlen(sc->base) + 1 + qlen + 1;
+				+ baselen + 1 + qlen + 1;
 			char *dst;
 			if (total < EXPR_VAL_MAX && expr_val_used < EXPR_ARENA_CAP) {
 				dst = expr_val_pool[expr_val_used++];
@@ -1475,10 +1480,10 @@ qmap_apply_scoped_flags(void)
 			o += oldlen;
 			if (oldlen > 0)
 				*o++ = ' ';
-			memcpy(o, sc->base, strlen(sc->base));
-			o += strlen(sc->base);
+			memcpy(o, sc->base, baselen);
+			o += baselen;
 			*o++ = '=';
-			if (qmap_leaf_needs_quote(sc->value)) {
+			if (needs_q) {
 				*o++ = '\'';
 				for (const char *p = sc->value; *p; p++) {
 					if (*p == '\\' || *p == '\'')

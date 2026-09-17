@@ -33,6 +33,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -242,19 +243,34 @@ struct rec_axis_cli_option {
 };
 typedef struct rec_axis_cli_option rec_axis_cli_option_t;
 
-/** One pass over a caller-owned, NUL-terminated, MUTABLE decode-spec
- *  buffer: advance *cur past each key=value pair, point key at the key
- *  (start of the token, spaces skipped) and val at the value (unescaped
- *  IN PLACE, NUL-terminated). Grammar: space-separated tokens; a token
- *  without '=' is skipped and scanning continues; a value is bare
- *  (to the next space) or single-quoted with backslash escapes
- *  ('\\'→'\', '\''→'\''; lenient on an unterminated quote — consumes the
- *  tail). val is NULL when the scanned token had no '='. Returns 1 while a
- *  key=value pair was produced, 0 at the end of the string. Use:
- *      char *copy = strdup(spec);
- *      for (char *cur = copy; rec_spec_next(&cur, &key, &val); ) { … }
- *  The buffer stays owned by the caller for the whole pass. */
-int rec_spec_next(char **cur, char **key, char **val);
+/** Read-only pass over a decode spec (the kernel-owned decode grammar,
+ *  ZERO allocation — it never writes the buffer):
+ *  Keys AND values are returned as length-delimited ranges into the
+ *  CALLER'S string: a bare value runs from *val to the next space / tab /
+ *  '=' / NUL; a single-quoted value is returned as *val past the opening
+ *  quote with the RAW interior bytes spanning *val .. *val + *vlen and
+ *  *quoted set (backslash escapes stay encoded — use rec_cli_str_dup to
+ *  unescape into an owned copy). Tokens without '=' are skipped; every
+ *  1-return yields one key=value pair (key may be empty, e.g. "=x").
+ *  Pair with the rec_cli_*_b range parsers so a decode never needs to
+ *  copy the spec:
+ *      for (const char *cur = spec;
+ *           rec_spec_scan(&cur, &k, &klen, &v, &n, &q); )
+ *          if (rec_key_eq(k, klen, "dim"))
+ *              if (!rec_cli_int_b(v, v + n, &i)) …
+ *  Returns 1 while a pair was produced, 0 at the end. */
+int rec_spec_scan(const char **cur, const char **key, size_t *klen,
+                  const char **val, size_t *vlen, int *quoted);
+
+/** Exact compare of a length-delimited range against a constant:
+ *  `key` is [key, key+klen) (rec_spec_scan never NUL-terminates), so
+ *  plain strcmp can overrun the range; this is the safe form. */
+static inline int
+rec_key_eq(const char *key, size_t klen, const char *lit)
+{
+	size_t n = strlen(lit);
+	return n == klen && memcmp(key, lit, n) == 0;
+}
 
 /** Owned string setter for rec_axis_config_arg string fields: strdup then
  *  free-replace into *dst. 0 ok / -1 on NULL dst/value or allocation. */
@@ -267,6 +283,23 @@ int rec_cli_int(const char *v, int *out);
 int rec_cli_uint(const char *v, unsigned *out);
 int rec_cli_size(const char *v, size_t *out);
 int rec_cli_float(const char *v, float *out);
+
+/** Bounded variants for the read-only value ranges rec_spec_scan hands
+ *  out: parse [v, v_end), where the byte at v_end is the range's
+ *  boundary (space / tab / '=' / quote / NUL) and so can never be part
+ *  of a numeric token. Identical strictness to the NUL-terminated
+ *  parsers, which are these on v..v+strlen(v). */
+int rec_cli_int_b(const char *v, const char *v_end, int *out);
+int rec_cli_uint_b(const char *v, const char *v_end, unsigned *out);
+int rec_cli_size_b(const char *v, const char *v_end, size_t *out);
+int rec_cli_float_b(const char *v, const char *v_end, float *out);
+
+/** Duplicate the value range [v, v+n) into a fresh NUL-terminated string;
+ *  when quoted, unescape IN PLACE ('\\'→'\', '\''→'\'' like the scan
+ *  grammar; a trailing lone '\' stays literal). 0 ok / -1 on NULL or
+ *  allocation failure. The one allocation a string-field decode needs
+ *  (query/field/file). */
+int rec_cli_str_dup(const char *v, size_t n, int quoted, char **out);
 
 /** @} */
 
