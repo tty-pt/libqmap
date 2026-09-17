@@ -80,6 +80,13 @@ fold_fill(void *ctx, void *params, rec_set_t *out)
 	if (fold_cli_query_set && c->name[0])
 		fprintf(stderr, "fold %s query=%s verbose=%d\n",
 				c->name, fold_cli_query, fold_cli_verbose);
+	/* Scoped-flags side-channel: echoes the leaf spec string delivered to
+	 * this fold instance (params = the raw leaf value; decode is NULL).
+	 * Absent when the leaf carries no value — existing broadcast tests
+	 * keep their exact stderr. */
+	if (params && ((const char *)params)[0])
+		fprintf(stderr, "fold %s leaf=%s\n", c->name,
+				(const char *)params);
 	rec_set_fill_qmap_iter(out, c->fill);
 	rec_set_fill_qmap_iter(out, c->stash);
 	rec_set_seal(out);

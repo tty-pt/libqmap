@@ -9,6 +9,11 @@
 # "AXIS-BOOM-DECODED" on stderr for the value "boom"; fill() returns the
 # empty set for the value "empty", else refs {1,2,3}. Result-exactness is
 # also pinned: skipping never changes the printed rows.
+#
+# Post-flip grammar is structure-only: per-instance values ride scoped
+# flags (--query@A=empty), delivered to the bare leaf's decode via the
+# probe CLI fallback. Two differently-valued bare `pe` leaves therefore
+# enumerate as labeled instances A/B.
 
 td=$(mktemp -d)
 trap 'rm -rf "$td"' EXIT
@@ -57,22 +62,22 @@ filespec="$td/probe.db@pe:a:s"
 
 echo "=== AND: empty first → boom branch skipped (no decode marker) ==="
 marker_grep "and-empty-first-skips" 0 \
-	-X '(pe="empty" AND pe="boom")' -g . "$filespec"
+	-X '(A:pe AND B:pe)' -g . --query@A=empty --query@B=boom "$filespec"
 
 echo "=== AND control: boom first → leaf still decodes ==="
 marker_grep "and-control-boom-first-decodes" 1 \
-	-X '(pe="boom" AND pe="empty")' -g . "$filespec"
+	-X '(A:pe AND B:pe)' -g . --query@A=boom --query@B=empty "$filespec"
 
 echo "=== EXCEPT: empty left → right skipped ==="
 marker_grep "except-empty-left-skips" 0 \
-	-X '(pe="empty" EXCEPT pe="boom")' -g . "$filespec"
+	-X '(A:pe EXCEPT B:pe)' -g . --query@A=empty --query@B=boom "$filespec"
 
 echo "=== EXCEPT control: non-empty left → right decodes ==="
 marker_grep "except-control-right-decodes" 1 \
-	-X '(pe="zhit" EXCEPT pe="boom")' -g . "$filespec"
+	-X '(A:pe EXCEPT B:pe)' -g . --query@A=zhit --query@B=boom "$filespec"
 
 echo "=== result-exactness: empty AND boom prints no rows, exit 0 ==="
-out=$("$qmap" -X '(pe="empty" AND pe="boom")' -g . "$filespec" 2>/dev/null)
+out=$("$qmap" -X '(A:pe AND B:pe)' -g . --query@A=empty --query@B=boom "$filespec" 2>/dev/null)
 if [ -z "$out" ]; then
 	echo "ok - empty-and result empty"
 else
@@ -81,7 +86,7 @@ else
 fi
 
 echo "=== result-exactness: plain zhit AND zhit still rows 1..3 ==="
-out=$("$qmap" -X '(pe="zhit" AND pe="zhit")' -g . "$filespec")
+out=$("$qmap" -X '(A:pe AND B:pe)' -g . --query@A=zhit --query@B=zhit "$filespec")
 expected="1 a
 2 b
 3 c"
@@ -89,6 +94,35 @@ if [ "$out" = "$expected" ]; then
 	echo "ok - zhit-and rows intact"
 else
 	echo "FAIL - zhit-and rows changed"
+	echo "  expected: $(printf '%s' "$expected" | tr '\n' '|')"
+	echo "  actual:   $(printf '%s' "$out" | tr '\n' '|')"
+	fail=1
+fi
+
+echo "=== D15: labeled same-axis instances short-circuit independently ==="
+marker_grep "d15-and-empty-first-skips" 0 \
+	-X '(A:pe AND B:pe)' -g . --query@A=empty --query@B=boom "$filespec"
+
+marker_grep "d15-and-control-boom-first-decodes" 1 \
+	-X '(A:pe AND B:pe)' -g . --query@A=boom --query@B=empty "$filespec"
+
+echo "=== D15: E_REF with empty instance in EXCEPT ==="
+out=$("$qmap" -X '(A:pe EXCEPT A)' -g . --query@A=empty "$filespec" 2>/dev/null)
+if [ -z "$out" ]; then
+	echo "ok - d15-eref-except-empty"
+else
+	echo "FAIL - d15-eref-except not empty: $out"
+	fail=1
+fi
+
+out=$("$qmap" -X '(A:pe EXCEPT B:pe)' -g . --query@A=zhit --query@B=empty "$filespec")
+expected="1 a
+2 b
+3 c"
+if [ "$out" = "$expected" ]; then
+	echo "ok - d15-two-instances-except"
+else
+	echo "FAIL - d15-two-instances-except rows changed"
 	echo "  expected: $(printf '%s' "$expected" | tr '\n' '|')"
 	echo "  actual:   $(printf '%s' "$out" | tr '\n' '|')"
 	fail=1

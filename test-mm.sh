@@ -110,13 +110,14 @@ assert_eq "seed-persisted" "1
 3" "$out"
 
 echo "=== composed search (joint window AND stoma) ==="
-expr='(joint="a=2026-09-14 b=2026-09-16" AND stoma="field=text query=beacon matched=1")'
-out=$("$qmap" -X "$expr" -g . "$td/m.db:a:s" -t 10 2>/dev/null)
+expr='(joint AND stoma)'
+out=$("$qmap" -X "$expr" -g . --since=2026-09-14 --until=2026-09-16 \
+	--query=beacon --field=text --matched=1 "$td/m.db:a:s" -t 10 2>/dev/null)
 assert_eq "composed-and" "1 0.166667 2026-09-13:Beacon Harbor lights
 3 0.166667 2026-09-15:beacon beacon harbor" "$out"
 
 echo "=== pure-filter joint-only search (no score columns) ==="
-out=$("$qmap" -X 'joint="a=0 b=2026-09-14"' -g . "$td/m.db:a:s" 2>/dev/null)
+out=$("$qmap" -X 'joint' -g . --since=0 --until=2026-09-14 "$td/m.db:a:s" 2>/dev/null)
 assert_eq "joint-before" "1 2026-09-13:Beacon Harbor lights" "$out"
 
 echo "=== F4b: forget with joint+stoma roster → gone from all three ==="
@@ -127,9 +128,9 @@ assert_ok "forget-idempotent" "0" "$?"
 out=$("$qmap" -g . "$td/m.db:a:s" 2>/dev/null)
 assert_eq "forget-primary" "1
 2" "$out"
-out=$("$qmap" -X 'stoma="field=text query=beacon matched=1"' -g . "$td/m.db:a:s" 2>/dev/null)
+out=$("$qmap" -X 'stoma' -g . --query=beacon --field=text --matched=1 "$td/m.db:a:s" 2>/dev/null)
 assert_eq "forget-stoma" "1 0.166667 2026-09-13:Beacon Harbor lights" "$out"
-out=$("$qmap" -X 'joint="a=2026-09-15 b=2026-09-16"' -g . "$td/m.db:a:s" 2>/dev/null)
+out=$("$qmap" -X 'joint' -g . --since=2026-09-15 --until=2026-09-16 "$td/m.db:a:s" 2>/dev/null)
 # Presence semantics (F2): refs 1/2 own open [date,inf) intervals that still
 # overlap the window; only the forgotten ref 3 must be gone.
 assert_eq "forget-joint" "1 2026-09-13:Beacon Harbor lights
@@ -146,9 +147,9 @@ done
 assert_ok "reset-exit" "0" "$?"
 out=$("$qmap" -g . "$td/r.db:a:s" 2>/dev/null)
 assert_eq "reset-empty" "-1" "$out"
-out=$("$qmap" -X 'stoma="field=text query=beacon matched=1"' -g . "$td/r.db:a:s" 2>/dev/null)
+out=$("$qmap" -X 'stoma' -g . --query=beacon --field=text --matched=1 "$td/r.db:a:s" 2>/dev/null)
 assert_eq "reset-stoma-empty" "" "$out"
-out=$("$qmap" -X 'joint="a=0 b=2026-10-01"' -g . "$td/r.db:a:s" 2>/dev/null)
+out=$("$qmap" -X 'joint' -g . --since=0 --until=2026-10-01 "$td/r.db:a:s" 2>/dev/null)
 assert_eq "reset-joint-empty" "" "$out"
 echo "=== reset is idempotent ==="
 for ref in $("$qmap" -g . "$td/r.db:a:s" 2>/dev/null | grep -E '^[0-9]+$'); do

@@ -107,6 +107,14 @@ end-to-end in `test-real.sh` (two rank-capable axes in one `-X`
 expression → first-in-preorder stoma ranks, not sepal cosine) and
 `test-cli.sh` (`EXCEPT` chains left-to-right).
 
+**D15 (labeled instances):** the same axis may appear more than once as
+`label:axis` leaves. Rank-capable instances of one axis then aggregate as
+the **per-ref MAX score** (order-independent — `(A:stoma OR B:stoma)`
+ranks ref N by `max(scoreA, scoreB)`); distinct axes still keep the D2
+first-rankable-in-preorder rule. `--rank=A` (or the scoped `--rank@A`) pins
+the ranker to exactly the labeled instance A, erroring when that instance's
+axis has no `rank` fn.
+
 ## Kernel vs axes
 
 | Owns | The kernel | An axis (libjoint, libislet, stoma, …) |
@@ -345,11 +353,31 @@ Contract:
   undeclared name, a bare `--name` for a value option, or a valued
   `--flag=x` into usage + exit 1.
 - **Inline `--name=value` only** (no space form); max 16 collected options.
-- Precedence: **leaf spec > CLI arg > env**. Credentials stay env-only —
-  never CLI flags.
+- **Flags-first surface (2026-09-16):** `-X` is structure only. The old
+  `=VALUE` leaf grammar is gone — a hand-written `NAME=VALUE` inside `-X` is
+  a hard parse error whose message points at flags. The leaf value still
+  exists as **internal transport only**: scoped `--name@label` /
+  `--name@axis` meet per-leaf params by synthesizing `name='value'` into the
+  target leaf's decode spec (quoting/escaping internal, not user-writable
+  grammar). This is what preserved zero plugin-API changes; delete
+  `n->value`/decode and you are redesigning the plugin boundary, not
+  finishing this flag.
+- Unscoped `--name=value` **broadcasts** to every bound axis whose
+  `rec_axis_cli_options()` declares `name` — a shared value, not a
+  per-instance one. To target a single instance use `@label`/`@axis`
+  (`@label` beats `@axis` on double scope); an axis must not hard-abort a
+  shared broadcast it cannot interpret.
+- Precedence: **leaf spec > `@label` > `@axis` > unscoped > env**.
+  Credentials stay env-only — never CLI flags.
 - The axis merges the CLI state in its own decode (what it omits stays
   omitted); a bare leaf may fall back to CLI state (e.g. bare `sepal` +
-  `--query`), or stay unsearchable (bare `stoma` stays `NULL`).
+  `--file`), or stay unsearchable (bare `stoma` stays `NULL`). joint's
+  per-end chain is **leaf `a`/`b` > `--since`/`--until` > `--query` >
+  unset**; `--query` accepts a point timestamp (widened to its containing
+  calendar day, TZ-safe via `localtime`/`mktime`) or a space-free `A..B`
+  interval, and **ignores non-parseable values** (rc 0, store nothing) so a
+  shared broadcast `--query` = plain text never aborts a mixed-axis run
+  (a reversed `A..B` still errors).
 - Same CLI↔axis-plugin convention as `rec_axis_open`/store: optional,
   dlsym'd, libqmap holds zero axis knowledge.
 

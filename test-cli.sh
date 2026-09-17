@@ -142,12 +142,9 @@ expected="1 one
 2 two"
 assert_eq "pure-filter" "$expected" "$out"
 
-echo "=== -X NAME=VALUE: whole-string VALUE forwarded ==="
-out=$("$qmap" -X "alpha=hello world" -g . "$td/demo.db:a:s")
-expected="3 3.000000 three
-2 2.000000 two
-1 1.000000 one"
-assert_eq "name-value" "$expected" "$out"
+echo "=== -X NAME=VALUE is gone: a loud failure pointing at flags ==="
+assert_fails "name-value-removed" "no longer allowed in -X" \
+	-X "alpha=hello world" -g . "$td/demo.db:a:s"
 
 echo "=== -X empty string: unarmed, classic -g . ==="
 # NOTE: classic -g . on an :a: primary prints refs (verified byte-identical
@@ -264,6 +261,60 @@ assert_fails "cli-bare-query" "requires --query=VALUE" -X alpha -g . --query "$t
 
 echo "=== --verbose=1 on a bare-flag option: takes no value, exit 1 ==="
 assert_fails "cli-verbose-val" "takes no value" -X alpha -g . --verbose=1 "$td/demo.db:a:s"
+
+echo "=== D15 labeled instances: (A:alpha AND B:beta) with scoped flags ==="
+# Per-instance delivery is observable via the fold leaf= echo; the plain
+# broadcast claim (query=... verbose=0) must be ABSENT for scoped tokens.
+out=$("$qmap" -X '(A:alpha AND B:beta)' -g . --query@A=hello --query@B=world \
+	"$td/demo.db:a:s" 2>"$td/d15-err")
+expected="3 3.000000 three
+2 2.000000 two"
+assert_eq "d15-scoped-out" "$expected" "$out"
+if grep -q "fold alpha leaf=query=hello" "$td/d15-err" \
+		&& grep -q "fold beta leaf=query=world" "$td/d15-err" \
+		&& ! grep -q "query=hello verbose" "$td/d15-err"; then
+	echo "ok - d15-scoped-err"
+else
+	echo "FAIL - d15-scoped-err"
+	echo "  stderr: $(cat "$td/d15-err")"
+	fail=1
+fi
+
+echo "=== E_REF backward-only references ==="
+out=$("$qmap" -X 'A:alpha AND A' -g . "$td/demo.db:a:s")
+expected="3 3.000000 three
+2 2.000000 two
+1 1.000000 one"
+assert_eq "d15-eref-self" "$expected" "$out"
+
+out=$("$qmap" -X 'NOT A:alpha' -g . "$td/demo.db:a:s")
+expected="9 9.000000 nine
+4 4.000000 four"
+assert_eq "d15-eref-not" "$expected" "$out"
+
+out=$("$qmap" -X 'B:beta AND B' -g . "$td/demo.db:a:s")
+expected="4 4.000000 four
+3 3.000000 three
+2 2.000000 two"
+assert_eq "d15-eref-later" "$expected" "$out"
+
+echo "=== --rank@A picks the labeled instance ==="
+out=$("$qmap" -X '(A:alpha AND B:beta)' -g . --rank@B "$td/demo.db:a:s")
+expected="3 3.000000 three
+2 2.000000 two"
+assert_eq "d15-rank-b" "$expected" "$out"
+
+out=$("$qmap" -X '(A:alpha AND B:beta)' -g . --rank@B -t 1 "$td/demo.db:a:s")
+expected="3 3.000000 three"
+assert_eq "d15-rank-b-top1" "$expected" "$out"
+
+echo "=== D15 grammar/scope error surface (exit 1, exact stderr) ==="
+assert_fails "d15-dup-label" "duplicate label 'A'" -X 'A:alpha EXCEPT A:alpha' -g . "$td/demo.db:a:s"
+assert_fails "d15-forward-ref" "unknown axis name 'A'" -X 'A AND A:alpha' -g . "$td/demo.db:a:s"
+assert_fails "d15-label-collision" "label 'alpha' collides with axis name 'alpha'" -X 'alpha:alpha AND beta' -g . "$td/demo.db:a:s"
+assert_fails "d15-scope-unknown" "unknown label or axis 'Nope'" -X 'A:alpha' -g . --query@Nope=hello "$td/demo.db:a:s"
+assert_fails "d15-scope-no-value" "requires --query@A=VALUE" -X 'A:alpha' -g . --query@A "$td/demo.db:a:s"
+assert_fails "d15-scope-bare-flag" "takes no value" -X 'A:alpha' -g . --verbose@A "$td/demo.db:a:s"
 
 echo "=== >16 plugin options: too-many error, exit 1 ==="
 many=""

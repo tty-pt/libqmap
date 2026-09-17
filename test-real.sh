@@ -175,16 +175,19 @@ else
 fi
 
 echo "=== space ∩ time ∩ text: the conjunctive winner ==="
-expr='(joint="a=2026-09-14 b=2026-09-15" AND islet="dim=2 s=9,1 l=1,1") AND stoma="field=text query=beacon matched=1"'
-out=$("$qmap" -X "$expr" -g . "$roster" -t 100 2>"$td/q.err")
+# Post-flip structure-only -X; every parameter rides scoped flags.
+expr='(A:joint AND B:islet) AND C:stoma'
+out=$("$qmap" -X "$expr" -g . --since@A=2026-09-14 --until@A=2026-09-15 \
+	--dim@B=2 --s@B=9,1 --l@B=1,1 --query@C=beacon --field@C=text \
+	--matched@C=1 -t 100 "$roster" 2>"$td/q.err")
 echo "--- query stderr ---"; cat "$td/q.err"
 echo "--- query stdout ---"; printf '%s\n' "$out"
 expected="3 0.125000 2026-09-14T12:00:00:Beacon Harbor lights"
 assert_eq "winner" "$expected" "$out"
 
 echo "=== sepal column query ==="
-sexpr="sepal=\"file=$qvec qdim=$qdim m=2 min_sim=0.5\""
-out=$("$qmap" -X "$sexpr" -g . "$roster" -t 100 2>"$td/s.err")
+out=$("$qmap" -X 'sepal' -g . --file="$qvec" --qdim="$qdim" --m=2 \
+	--min-sim=0.5 -t 100 "$roster" 2>"$td/s.err")
 echo "--- sepal stderr ---"; cat "$td/s.err"
 echo "--- sepal stdout ---"; printf '%s\n' "$out"
 if [ -n "$QMAP_SEPAL_EMBED_URL" ] && [ -n "$QMAP_SEPAL_EMBED_MODEL" ]; then
@@ -211,8 +214,12 @@ else
 	assert_eq "sepal-floats" "$expected" "$out"
 
 	echo "=== two rankers, one expression: first rank-capable leaf in preorder wins (D2) ==="
-	sexpr2='stoma="field=text query=beacon matched=1" AND sepal="file='"$qvec"' qdim='"$qdim"' m=2 min_sim=0.5"'
-	out=$("$qmap" -X "$sexpr2" -g . "$roster" -t 100 2>"$td/s2.err")
+	# stoma query is scoped (its field/query would otherwise collide on the
+	# shared broadcast --query); sepal takes unscoped file/qdim/m/min-sim.
+	sexpr2='C:stoma AND sepal'
+	out=$("$qmap" -X "$sexpr2" -g . --query@C=beacon --field@C=text \
+		--matched@C=1 --file="$qvec" --qdim="$qdim" --m=2 --min-sim=0.5 \
+		-t 100 "$roster" 2>"$td/s2.err")
 	echo "--- two-rank stderr ---"; cat "$td/s2.err"
 	echo "--- two-rank stdout ---"; printf '%s\n' "$out"
 	# First-in-preorder stoma ranks (matched/doc-tokens 0.125 both), NOT
@@ -222,6 +229,97 @@ else
 3 0.125000 2026-09-14T12:00:00:Beacon Harbor lights"
 	assert_eq "stoma-over-sepal" "$expected" "$out"
 fi
+
+echo "=== scoped labeled instances over real axes (stoma) ==="
+# D15: two stoma instances in one expression, each with its OWN scoped
+# query (beacon → {1,3}, alpha → {2}). Same-axis rankers aggregate by
+# max score per ref, so OR prints all three, tie → asc ref.
+out=$("$qmap" -X 'A:stoma OR B:stoma' -g . --query@A=beacon \
+	--query@B=alpha -t 10 "$roster" 2>"$td/l1.err")
+expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
+2 0.000000 2026-09-15T08:00:00:alpha omega
+3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
+assert_eq "scoped-or" "$expected" "$out"
+
+out=$("$qmap" -X 'A:stoma EXCEPT B:stoma' -g . --query@A=beacon \
+	--query@B=alpha -t 10 "$roster" 2>/dev/null)
+expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
+3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
+assert_eq "scoped-except" "$expected" "$out"
+
+out=$("$qmap" -X 'NOT (A:stoma)' -g . --query@A=alpha -t 10 "$roster" 2>/dev/null)
+expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
+3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
+assert_eq "scoped-not" "$expected" "$out"
+
+echo "=== E_REF backward-only references (real stoma) ==="
+out=$("$qmap" -X 'A:stoma AND A' -g . --query@A=beacon -t 10 "$roster" 2>/dev/null)
+expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
+3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
+assert_eq "eref-self" "$expected" "$out"
+
+echo "=== quoted value with spaces survives the synth (stoma) ==="
+out=$("$qmap" -X 'A:stoma' -g . '--query@A=harbor lights' -t 10 "$roster" 2>/dev/null)
+expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
+3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
+assert_eq "scoped-quoted-space" "$expected" "$out"
+
+echo "=== scoped joint via since=/until= aliases (a=/b= in the leaf) ==="
+# D15 decode alias: --since@A/--until@A synthesize since=/until= leaf
+# keys, which joint_decode accepts alongside a=/b=. A ⊂ {1,3}; E_REF
+# re-uses A's set (AND is a no-op); NOT moves to the complement.
+out=$("$qmap" -X 'A:joint AND A' -g . --since@A=2026-09-14 \
+	--until@A=2026-09-15 -t 10 "$roster" 2>/dev/null)
+expected="1 2026-09-13T20:00:00:Beacon Harbor lights
+3 2026-09-14T12:00:00:Beacon Harbor lights"
+assert_eq "joint-scoped-eref" "$expected" "$out"
+
+out=$("$qmap" -X 'NOT (A:joint)' -g . --since@A=2026-09-14 \
+	--until@A=2026-09-15 -t 10 "$roster" 2>/dev/null)
+expected="2 2026-09-15T08:00:00:alpha omega"
+assert_eq "joint-scoped-not" "$expected" "$out"
+
+out=$("$qmap" -X 'A:joint OR B:joint' -g . --since@A=2026-09-14 \
+	--until@A=2026-09-15 --since@B=2026-09-15 --until@B=2026-09-16 \
+	-t 10 "$roster" 2>/dev/null)
+expected="1 2026-09-13T20:00:00:Beacon Harbor lights
+2 2026-09-15T08:00:00:alpha omega
+3 2026-09-14T12:00:00:Beacon Harbor lights"
+assert_eq "joint-two-scopes" "$expected" "$out"
+
+echo "=== escape roundtrips through the real stoma tokenizer ==="
+# Second primary whose text carries an apostrophe and a backslash; the
+# scoped values must arrive byte-identical (synth escapes, stoma decode
+# unescapes). Timestamp prefixes keep the joint column parseable.
+"$qmap" -p 1:"2026-09-13T00:00:00:plain record" \
+	-p 2:"2026-09-14T00:00:00:don't stop thinking" \
+	-p 3:"2026-09-15T00:00:00:back\\slash path" \
+	"$td/esc.db:a:s" >/dev/null
+"$td/real_seed" "$axis_path" "$td/esc.db" 2>"$td/esc-seed.err" \
+	|| { cat "$td/esc-seed.err"; echo "FAIL - esc seeding"; fail=1; }
+esc_roster="$td/esc.db@joint,islet,sepal,stoma:a:s"
+"$qmap" --list-axes "$esc_roster" >/dev/null 2>/dev/null
+out=$("$qmap" -X 'A:stoma' -g . "--query@A=don't" -t 10 "$esc_roster" 2>/dev/null)
+expected="2 0.000000 2026-09-14T00:00:00:don't stop thinking"
+assert_eq "escape-apostrophe" "$expected" "$out"
+
+out=$("$qmap" -X 'A:stoma' -g . --query@A='back\slash' -t 10 "$esc_roster" 2>/dev/null)
+expected="3 0.000000 2026-09-15T00:00:00:back\\slash path"
+assert_eq "escape-backslash" "$expected" "$out"
+
+echo "=== shared broadcast --query: joint accept-and-ignore, stoma answers ==="
+# FLAGS-FIRST regression: an unscoped --query=beacon is broadcast to every
+# bound axis declaring `query` — joint declares it too. joint must
+# accept-and-ignore the non-parseable "beacon" (no abort, window from
+# --since/--until wins) while stoma still matches. Binds only joint+stoma
+# so the broadcast cannot double-feature sepal's own query path.
+js_roster="$td/greps.db@joint,stoma:a:s"
+out=$("$qmap" -X '(joint AND stoma)' -g . --query=beacon --since=0 \
+	--until=2026-09-16 -t 10 "$js_roster" 2>"$td/shared.err")
+echo "--- shared stderr ---"; cat "$td/shared.err"
+expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
+3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
+assert_eq "shared-query-regression" "$expected" "$out"
 
 echo "=== classic zero-plugin regression (fresh, no roster) ==="
 (

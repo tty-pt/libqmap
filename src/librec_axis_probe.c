@@ -19,6 +19,46 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* D14 axis-contributed CLI surface (test-only, probe plugin): the qmap
+ * CLI broadcasts inline `--query=…` to every bound axis declaring the
+ * name; probe adopts it. After Slice 4, bare leaves carry no value, so
+ * probe_decode must fall back to the CLI value when s == NULL. */
+static char *probe_cli_query;
+
+struct rec_axis_cli_option {
+	const char *name;
+	int has_arg;
+	const char *help;
+};
+
+const struct rec_axis_cli_option *
+rec_axis_cli_options(void)
+{
+	static const struct rec_axis_cli_option opts[] = {
+		{ "query", 1, "probe value for testing (empty/boom/raw)" },
+		{ NULL, 0, NULL }
+	};
+	return opts;
+}
+
+int
+rec_axis_config_arg(const char *name, const char *value)
+{
+	char *copy;
+
+	if (!name || !value)
+		return -1;
+	if (!strcmp(name, "query")) {
+		copy = strdup(value);
+		if (!copy)
+			return -1;
+		free(probe_cli_query);
+		probe_cli_query = copy;
+		return 0;
+	}
+	return -1;
+}
+
 typedef struct {
 	rec_ref_t refs[3];
 	size_t     n;
@@ -46,11 +86,39 @@ probe_decode(const char *s)
 {
 	char *copy;
 
+	/* CLI fallback (post-flip bare leaves deliver NULL). */
+	if (!s || !*s)
+		s = probe_cli_query;
 	if (!s)
 		return NULL;
-	if (!strcmp(s, "boom"))
-		fprintf(stderr, "AXIS-BOOM-DECODED\n");
+
+	/* Scoped flags deliver the stoma-style spec "query='value'"; unwrap
+	 * the single query key so whole-string semantics see the raw value
+	 * ("empty"/"boom"/anything). Probe declares only `query`, so there is
+	 * at most one key. */
+	if (!strncmp(s, "query=", 6)) {
+		s += 6;
+		if (*s == '\'') {
+			const char *e = strrchr(s, '\'');
+			if (e && e != s) {
+				size_t n = (size_t)(e - s - 1);
+
+				copy = malloc(n + 1);
+				if (!copy)
+					return NULL;
+				memcpy(copy, s + 1, n);
+				copy[n] = '\0';
+				if (!strcmp(copy, "boom"))
+					fprintf(stderr, "AXIS-BOOM-DECODED\n");
+				return copy;
+			}
+		}
+	}
 	copy = strdup(s);
+	if (!copy)
+		return NULL;
+	if (!strcmp(copy, "boom"))
+		fprintf(stderr, "AXIS-BOOM-DECODED\n");
 	return copy;
 }
 

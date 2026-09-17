@@ -251,20 +251,40 @@ static int expr_n;
 static size_t top_k;
 static float min_score;
 
-enum expr_kind { E_LEAF, E_NOTP, E_AND, E_OR, E_SUB };
+enum expr_kind { E_LEAF, E_NOTP, E_AND, E_OR, E_SUB, E_REF };
+
+#define LABEL_MAX 31
+#define EXPR_LABEL_CAP 64
 
 struct expr_node {
 	enum expr_kind kind;
-	const char    *name;     /* E_LEAF only; borrowed from expr_str */
-	const char    *value;    /* E_LEAF only; NULL = params "" */
+	const char    *name;       /* E_LEAF: axis name (expr_names[]);
+	                            * E_REF: borrowed label from expr_str */
+	const char    *value;      /* E_LEAF only; NULL = params "" */
+	char           label[LABEL_MAX + 1]; /* E_LEAF: instance label, "" = none */
+	struct expr_node *ref;     /* E_REF: the defining E_LEAF node */
+	int            heapval;    /* E_LEAF: value malloc'd (freed at end) */
 	int            kids_n;
 	struct expr_node *kids[REC_QUERY_MAX_AXES + 1];
-	rec_set_t     *set;      /* memoized eval (sealed); NULL until eval */
+	rec_set_t     *set;      /* memoized eval (sealed); NULL until eval;
+	                          * E_REF borrows the target's set, owns none */
 };
 
 #define EXPR_ARENA_CAP 512
 static struct expr_node expr_arena[EXPR_ARENA_CAP];
 static int expr_used;
+
+static struct expr_node *expr_labels[EXPR_LABEL_CAP];
+static int expr_labels_n;
+
+/* `--rank=A`: force the labeled instance A to rank the composed output
+ * ("" = auto: first rank-capable axis wins, D2). D15C core override. */
+static char rank_override[LABEL_MAX + 1];
+
+/* Parser errors and label lookup live below the lexer; prototypes hoisted
+ * for the earlier D15 scoped-flag machinery. */
+static void qmap_expr_error(const char *fmt, ...);
+static struct expr_node *qmap_expr_label_find(const char *label);
 
 #define EXPR_VAL_MAX 256
 static char expr_val_pool[EXPR_ARENA_CAP][EXPR_VAL_MAX];
@@ -279,10 +299,12 @@ static void *ranker_params;
 #define CLIP_OPT_TOP       257
 #define CLIP_OPT_BOTTOM    258
 #define CLIP_OPT_PLUGIN    259
+#define CLIP_OPT_RANK      260
 static const struct option cli_long_opts[] = {
 	{ "list-axes", no_argument,       NULL, CLIP_OPT_LIST_AXES },
 	{ "top",       required_argument, NULL, CLIP_OPT_TOP },
 	{ "bottom",    required_argument, NULL, CLIP_OPT_BOTTOM },
+	{ "rank",      required_argument, NULL, CLIP_OPT_RANK },
 	{ NULL, 0, NULL, 0 }
 };
 
@@ -311,6 +333,21 @@ static int qmap_cli_pn;
 static struct option qmap_cli_plugin_opts[3 + 1 + QMAP_CLI_PLUGIN_CAP + 1];
 static const char *qmap_cli_prog;
 
+/* ── scoped flags (D15B): `--name@label` / `--name@axis` are collected by
+ *    the generic plugin collector (the name literally contains the '@') and
+ *    resolved here, after axes load. is_axis=1 targets bare instances of an
+ *    axis name; is_axis=0 targets the labeled instance exactly. Values are
+ *    injected into the leaf's synth'd decode spec — never via plugin cfg. */
+#define QMAP_SCOPED_CAP 64
+struct qmap_scoped {
+	char label[LABEL_MAX + 1];
+	char base[QMAP_CLI_PLUGIN_NAME_MAX + 1];
+	const char *value;
+	int is_axis;
+};
+static struct qmap_scoped qmap_scoped[QMAP_SCOPED_CAP];
+static int qmap_scoped_n;
+
 /* Mirror getopt_long's consumption of the fixed surface on the UNPERMUTED
  * argv: arg-taking shorts (from optstr "kxla:q:p:d:D:g:m:c:rR:L:X:t:b:?": a q
  * p d D g m R X t b), the three core longs (list-axes no-arg; top/bottom take
@@ -337,7 +374,8 @@ qmap_cli_plugin_collect(int argc, char **argv)
 			if (nl == 9 && !strncmp(name, "list-axes", 9))
 				continue;                       /* core long, no arg */
 			if ((nl == 3 && !strncmp(name, "top", 3))
-					|| (nl == 6 && !strncmp(name, "bottom", 6))) {
+					|| (nl == 6 && !strncmp(name, "bottom", 6))
+					|| (nl == 4 && !strncmp(name, "rank", 4))) {
 				i++;                            /* plus its arg */
 				continue;
 			}
@@ -368,9 +406,8 @@ static const struct option *
 qmap_cli_plugin_table(void)
 {
 	int n = 0;
-	qmap_cli_plugin_opts[n++] = cli_long_opts[0];
-	qmap_cli_plugin_opts[n++] = cli_long_opts[1];
-	qmap_cli_plugin_opts[n++] = cli_long_opts[2];
+	for (int i = 0; cli_long_opts[i].name; i++)
+		qmap_cli_plugin_opts[n++] = cli_long_opts[i];
 	for (int i = 0; i < qmap_cli_pn; i++)
 		qmap_cli_plugin_opts[n++] = (struct option){
 			.name = qmap_cli_pname[i],
@@ -412,10 +449,10 @@ usage(char *prog)
 	fprintf(stderr, "        -x               when printing associations, bail on first result\n");
 	fprintf(stderr, "        -k               also print keys (for get and rand).\n");
 	fprintf(stderr, "        -X EXPR          composed set query (arms -g .)\n");
-	fprintf(stderr, "                         leaves NAME[=VALUE]; operators ( ) AND OR EXCEPT NOT\n");
-	fprintf(stderr, "                         (uppercase); A EXCEPT B = setminus; NOT X = complement\n");
-	fprintf(stderr, "                         unquoted VALUE ends at an operator or paren;\n");
-	fprintf(stderr, "                         quote values containing operator words\n");
+	fprintf(stderr, "                         leaves NAME [label:NAME]; operators ( ) AND OR\n");
+	fprintf(stderr, "                         EXCEPT NOT (uppercase); A EXCEPT B = setminus;\n");
+	fprintf(stderr, "                         NOT X = complement; structure only — parameters go in\n");
+	fprintf(stderr, "                         flags (--NAME=VALUE / --NAME@LABEL=VALUE)\n");
 	fprintf(stderr, "        -t N             cap result count (0 = all)\n");
 	fprintf(stderr, "        -b F             score floor\n");
 	fprintf(stderr, "        --NAME=VALUE     per-axis config; forwarded to every bound\n");
@@ -1190,6 +1227,8 @@ qmap_axes_dlopen_env(int quiet)
  * describing via rec_axis_cli_options). Runs before pass-2 eval so an
  * axis's decode/fill merges the CLI config. An axis declaring nothing is
  * untouched; an option no bound .so declares is a hard error. */
+static void qmap_apply_scoped_flags(void);
+
 static void
 qmap_cli_plugin_flush(void)
 {
@@ -1231,6 +1270,8 @@ qmap_cli_plugin_flush(void)
 		const char *name = qmap_cli_pname[c];
 		const char *value = qmap_cli_pval[c];
 		int found = 0;
+		if (strchr(name, '@'))
+			continue;   /* scoped: resolved in the D15B pass below */
 		for (int p = 0; p < nplug; p++) {
 			const rec_axis_cli_option_t *o = plugs[p].opts;
 			for (int k = 0; o[k].name && k < QMAP_CLI_PLUGIN_OPTS_MAX; k++) {
@@ -1263,6 +1304,196 @@ qmap_cli_plugin_flush(void)
 			fprintf(stderr, "qmap: unknown option '--%s'\n", name);
 			usage((char *) qmap_cli_prog);
 			exit(EXIT_FAILURE);
+		}
+	}
+
+	/* D15B: resolve the collected scoped tokens. ── */
+	for (int c = 0; c < qmap_cli_pn; c++) {
+		const char *name = qmap_cli_pname[c];
+		const char *value = qmap_cli_pval[c];
+		const char *at = strchr(name, '@');
+
+		if (!at)
+			continue;   /* plain broadcast handled above */
+
+		size_t blen = (size_t)(at - name);
+		const char *scope = at + 1;
+		if (blen == 0 || !*scope) {
+			fprintf(stderr, "qmap: unknown option '--%s'\n", name);
+			usage((char *) qmap_cli_prog);
+			exit(EXIT_FAILURE);
+		}
+
+		if (blen == 4 && !strncmp(name, "rank", 4)) {
+			/* Core override: --rank@A forces instance A to rank. */
+			if (!qmap_expr_label_find(scope)) {
+				fprintf(stderr,
+					"qmap: --rank@%s: unknown label '%s'\n",
+					scope, scope);
+				usage((char *) qmap_cli_prog);
+				exit(EXIT_FAILURE);
+			}
+			if (strlen(scope) > LABEL_MAX) {
+				fprintf(stderr, "qmap: --rank@%s: label too long\n",
+						scope);
+				exit(EXIT_FAILURE);
+			}
+			strcpy(rank_override, scope);
+			continue;
+		}
+
+		/* base must be a real plugin option taking a value. */
+		char base[QMAP_CLI_PLUGIN_NAME_MAX + 1];
+		if (blen > QMAP_CLI_PLUGIN_NAME_MAX) {
+			fprintf(stderr, "qmap: unknown option '--%s'\n", name);
+			usage((char *) qmap_cli_prog);
+			exit(EXIT_FAILURE);
+		}
+		memcpy(base, name, blen);
+		base[blen] = '\0';
+		int declared = 0, has_arg = 0;
+		for (int p = 0; p < nplug && !declared; p++)
+			for (int k = 0; plugs[p].opts[k].name
+					&& k < QMAP_CLI_PLUGIN_OPTS_MAX; k++)
+				if (!strcmp(plugs[p].opts[k].name, base)) {
+					declared = 1;
+					has_arg = plugs[p].opts[k].has_arg;
+					break;
+				}
+		if (!declared) {
+			fprintf(stderr, "qmap: unknown option '--%s'\n", name);
+			usage((char *) qmap_cli_prog);
+			exit(EXIT_FAILURE);
+		}
+		if (!has_arg) {
+			fprintf(stderr, "qmap: option '--%s' takes no value\n", name);
+			usage((char *) qmap_cli_prog);
+			exit(EXIT_FAILURE);
+		}
+		if (!value) {
+			fprintf(stderr,
+				"qmap: option '--%s' requires --%s=VALUE\n",
+				name, name);
+			usage((char *) qmap_cli_prog);
+			exit(EXIT_FAILURE);
+		}
+		if (qmap_scoped_n >= QMAP_SCOPED_CAP) {
+			fprintf(stderr, "qmap: too many scoped options (max %d)\n",
+					QMAP_SCOPED_CAP);
+			exit(EXIT_FAILURE);
+		}
+		struct qmap_scoped *sc = &qmap_scoped[qmap_scoped_n];
+		sc->is_axis = 0;
+		if (qmap_expr_label_find(scope))
+			;                       /* exact labeled instance */
+		else if (qmap_axes_find_slot(scope) >= 0)
+			sc->is_axis = 1;       /* every bare instance of the axis */
+		else {
+			fprintf(stderr, "qmap: unknown label or axis '%s'\n", scope);
+			usage((char *) qmap_cli_prog);
+			exit(EXIT_FAILURE);
+		}
+		if (strlen(scope) > LABEL_MAX) {
+			fprintf(stderr, "qmap: --%s: scope '%s' too long\n",
+					base, scope);
+			exit(EXIT_FAILURE);
+		}
+		strcpy(sc->label, scope);
+		strcpy(sc->base, base);
+		sc->value = value;
+		qmap_scoped_n++;
+	}
+
+	qmap_apply_scoped_flags();
+}
+
+/* Length of `v` after single-quoting, escaping '\' and '''. */
+static size_t
+qmap_leaf_quote_len(const char *v)
+{
+	size_t n = 2;                       /* opening + closing quote */
+	for (const char *p = v; *p; p++)
+		n += (*p == '\\' || *p == '\'') ? 2 : 1;
+	return n;
+}
+
+static int
+qmap_leaf_needs_quote(const char *v)
+{
+	for (const char *p = v; *p; p++)
+		if (*p == ' ' || *p == '\t' || *p == '\'' || *p == '"'
+				|| *p == '(' || *p == ')')
+			return 1;
+	return 0;
+}
+
+/* D15B: synthesize each scoped pair into the labeled/bare leaf's decode
+ * spec so the per-instance parameters reach decode() with zero plugin
+ * gains. Runs after axes bind; the tree and the label table are both live.
+ */
+static void
+qmap_apply_scoped_flags(void)
+{
+	if (qmap_scoped_n == 0)
+		return;
+	for (int i = 0; i < expr_used; i++) {
+		struct expr_node *n = &expr_arena[i];
+		if (n->kind != E_LEAF)
+			continue;
+		for (int s = 0; s < qmap_scoped_n; s++) {
+			const struct qmap_scoped *sc = &qmap_scoped[s];
+			int match;
+			/* Per-key arbitration on double scope: @label beats @axis.
+			 * The collector resolves each name to a single scope (label
+			 * lookup first, then axis bare-name), so a leaf targeted by
+			 * both forms is only ever matched here once — the label
+			 * scope wins by construction. */
+			if (sc->is_axis)
+				match = n->label[0] == 0
+					&& !strcmp(n->name, sc->label);
+			else
+				match = !strcmp(n->label, sc->label);
+			if (!match)
+				continue;
+			const char *old = n->value ? n->value : "";
+			size_t oldlen = strlen(old);
+			size_t vlen = strlen(sc->value);
+			size_t qlen = qmap_leaf_needs_quote(sc->value)
+				? qmap_leaf_quote_len(sc->value) : vlen;
+			size_t total = oldlen + (oldlen > 0 ? 1 : 0)
+				+ strlen(sc->base) + 1 + qlen + 1;
+			char *dst;
+			if (total < EXPR_VAL_MAX && expr_val_used < EXPR_ARENA_CAP) {
+				dst = expr_val_pool[expr_val_used++];
+				n->heapval = 0;
+			} else {
+				dst = malloc(total);
+				if (!dst)
+					qmap_expr_error("out of memory");
+				n->heapval = 1;
+			}
+			char *o = dst;
+			memcpy(o, old, oldlen);
+			o += oldlen;
+			if (oldlen > 0)
+				*o++ = ' ';
+			memcpy(o, sc->base, strlen(sc->base));
+			o += strlen(sc->base);
+			*o++ = '=';
+			if (qmap_leaf_needs_quote(sc->value)) {
+				*o++ = '\'';
+				for (const char *p = sc->value; *p; p++) {
+					if (*p == '\\' || *p == '\'')
+						*o++ = '\\';
+					*o++ = *p;
+				}
+				*o++ = '\'';
+			} else {
+				memcpy(o, sc->value, vlen);
+				o += vlen;
+			}
+			*o = '\0';
+			n->value = dst;
 		}
 	}
 }
@@ -1565,8 +1796,6 @@ static struct {
 	enum tok t;
 	const char *word;
 	size_t len;
-	const char *val;
-	size_t val_len;
 } qmap_cur_tok;
 
 static const char *lx;
@@ -1585,8 +1814,6 @@ lx_next(void)
 {
 	while (*lx == ' ' || *lx == '\t')
 		lx++;
-	qmap_cur_tok.val = NULL;
-	qmap_cur_tok.val_len = 0;
 
 	if (*lx == '\0') {
 		qmap_cur_tok.t = T_EOF;
@@ -1621,62 +1848,19 @@ lx_next(void)
 	if (qmap_cur_tok.t != T_NAME)
 		return;
 
-	/* optional NAME=VALUE (whole-string, D5) */
+	/* Flags-first grammar (FLAGS-FIRST): a NAME inside -X never carries a
+	 * value. The lexer above stops at '='; if the next non-space char is
+	 * one, the user wrote the removed NAME=VALUE form — reject loudly and
+	 * point at the flag surface. Runs pre-axes-setup, so the error fires
+	 * before any axis wiring. */
 	const char *ws = lx;
 	while (*ws == ' ' || *ws == '\t')
 		ws++;
-	if (*ws != '=')
-		return;
-	lx = ws + 1;
-	while (*lx == ' ' || *lx == '\t')
-		lx++;
-
-	if (*lx == '"' || *lx == '\'') {
-		char quote = *lx;
-		lx++;
-		const char *vs = lx;
-		while (*lx && *lx != quote)
-			lx++;
-		if (*lx != quote)
-			qmap_expr_error("unterminated quote");
-		qmap_cur_tok.val = vs;
-		qmap_cur_tok.val_len = lx - vs;
-		lx++;
-		return;
-	}
-
-	const char *vs = lx;
-	while (*lx) {
-		if (*lx == '(' || *lx == ')') {
-			qmap_cur_tok.val = vs;
-			qmap_cur_tok.val_len = lx - vs;
-			return;
-		}
-		if (*lx == ' ' || *lx == '\t') {
-			const char *p = lx;
-			while (*p == ' ' || *p == '\t')
-				p++;
-			if (*p == '\0' || *p == '(' || *p == ')') {
-				qmap_cur_tok.val = vs;
-				qmap_cur_tok.val_len = lx - vs;
-				return;
-			}
-			const char *pw = p;
-			while (*p && *p != ' ' && *p != '\t'
-					&& *p != '(' && *p != ')')
-				p++;
-			if (lx_is_keyword(pw, p - pw)) {
-				qmap_cur_tok.val = vs;
-				qmap_cur_tok.val_len = lx - vs;
-				return;
-			}
-			lx++;
-			continue;
-		}
-		lx++;
-	}
-	qmap_cur_tok.val = vs;
-	qmap_cur_tok.val_len = lx - vs;
+	if (*ws == '=')
+		qmap_expr_error(
+			"'%.*s=VALUE' no longer allowed in -X; pass values via "
+			"--flags (e.g. --query=… / --query@A=…)",
+			(int)len, start);
 }
 
 static struct expr_node *qmap_expr_setexpr(void);
@@ -1695,6 +1879,15 @@ qmap_expr_alloc(enum expr_kind kind)
 	memset(n, 0, sizeof(*n));
 	n->kind = kind;
 	return n;
+}
+
+static struct expr_node *
+qmap_expr_label_find(const char *label)
+{
+	for (int i = 0; i < expr_labels_n; i++)
+		if (!strcmp(expr_labels[i]->label, label))
+			return expr_labels[i];
+	return NULL;
 }
 
 static struct expr_node *
@@ -1763,6 +1956,21 @@ qmap_expr_notexpr(void)
 	return qmap_expr_primary();
 }
 
+static int
+qmap_valid_label_chars(const char *s, size_t len)
+{
+	if (len == 0 || len > LABEL_MAX)
+		return 0;
+	if (!((s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z')
+			|| s[0] == '_'))
+		return 0;
+	for (size_t i = 1; i < len; i++)
+		if (!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z')
+				|| (s[i] >= '0' && s[i] <= '9') || s[i] == '_'))
+			return 0;
+	return 1;
+}
+
 static struct expr_node *
 qmap_expr_primary(void)
 {
@@ -1786,13 +1994,42 @@ qmap_expr_leaf(void)
 		qmap_expr_error("unexpected token '%.*s'",
 				(int)qmap_cur_tok.len, qmap_cur_tok.word);
 
-	const char *name = qmap_cur_tok.word;
-	size_t name_len = qmap_cur_tok.len;
+	const char *word = qmap_cur_tok.word;
+	size_t len = qmap_cur_tok.len;
+	const char *colon = memchr(word, ':', len);
+
+	if (!colon) {
+		/* Backward-only label reference: a bare name of a label defined
+		 * earlier in source reuses that instance's memoized set. */
+		for (int i = 0; i < expr_labels_n; i++) {
+			const char *lbl = expr_labels[i]->label;
+			if (strlen(lbl) == len && !memcmp(lbl, word, len)) {
+				struct expr_node *r = qmap_expr_alloc(E_REF);
+				r->ref = expr_labels[i];
+				r->name = lbl;
+				lx_next();
+				return r;
+			}
+		}
+	}
+
+	/* A label definition splits `label:axis` at the first colon; the axis
+	 * portion registers into expr_names[] exactly like a plain leaf. */
+	const char *axis = word;
+	size_t axis_len = len;
+	size_t llen = 0;
+	if (colon) {
+		llen = (size_t)(colon - word);
+		axis = colon + 1;
+		axis_len = len - llen - 1;
+	}
+	if (axis_len == 0)
+		qmap_expr_error("empty axis name");
 
 	int idx = -1;
 	for (int i = 0; i < expr_n; i++) {
 		size_t slen = strlen(expr_names[i]);
-		if (slen == name_len && !memcmp(expr_names[i], name, name_len)) {
+		if (slen == axis_len && !memcmp(expr_names[i], axis, axis_len)) {
 			idx = i;
 			break;
 		}
@@ -1801,26 +2038,35 @@ qmap_expr_leaf(void)
 		if (expr_n >= REC_QUERY_MAX_AXES)
 			qmap_expr_error("too many distinct axes (max %d)",
 					REC_QUERY_MAX_AXES);
-		if (name_len >= QMAP_AXIS_ROSTER_MAX)
+		if (axis_len >= QMAP_AXIS_ROSTER_MAX)
 			qmap_expr_error("axis name too long (max %d)",
 					QMAP_AXIS_ROSTER_MAX - 1);
-		memcpy(expr_names[expr_n], name, name_len);
-		expr_names[expr_n][name_len] = '\0';
+		memcpy(expr_names[expr_n], axis, axis_len);
+		expr_names[expr_n][axis_len] = '\0';
 		idx = expr_n++;
 	}
 
 	struct expr_node *n = qmap_expr_alloc(E_LEAF);
 	n->name = expr_names[idx];
 
-	if (qmap_cur_tok.val && qmap_cur_tok.val_len > 0) {
-		if (expr_val_used >= EXPR_ARENA_CAP)
-			qmap_expr_error("too many expression nodes");
-		size_t vlen = qmap_cur_tok.val_len;
-		if (vlen >= EXPR_VAL_MAX)
-			vlen = EXPR_VAL_MAX - 1;
-		memcpy(expr_val_pool[expr_val_used], qmap_cur_tok.val, vlen);
-		expr_val_pool[expr_val_used][vlen] = '\0';
-		n->value = expr_val_pool[expr_val_used++];
+	if (colon) {
+		if (llen == 0)
+			qmap_expr_error("empty label");
+		if (lx_is_keyword(word, llen))
+			qmap_expr_error("label cannot be a keyword");
+		if (!qmap_valid_label_chars(word, llen))
+			qmap_expr_error("invalid label '%.*s'", (int)llen, word);
+		for (int i = 0; i < expr_labels_n; i++)
+			if (strlen(expr_labels[i]->label) == llen
+					&& !memcmp(expr_labels[i]->label, word, llen))
+				qmap_expr_error("duplicate label '%.*s'",
+						(int)llen, word);
+		if (expr_labels_n >= EXPR_LABEL_CAP)
+			qmap_expr_error("too many labels (max %d)",
+					EXPR_LABEL_CAP);
+		memcpy(n->label, word, llen);
+		n->label[llen] = '\0';
+		expr_labels[expr_labels_n++] = n;
 	}
 
 	lx_next();
@@ -1834,6 +2080,11 @@ qmap_expr_eval(struct expr_node *n, rec_set_t *universe)
 		return n->set;
 
 	switch (n->kind) {
+	case E_REF:
+		if (!n->ref || !n->ref->set)
+			qmap_expr_error("label '%s': instance not evaluated",
+					n->name);
+		return n->ref->set;
 	case E_LEAF: {
 		int slot = qmap_axes_find_slot(n->name);
 		const rec_axis_t *axis = rec_axis_get(slot);
@@ -1903,6 +2154,21 @@ qmap_expr_free_tree(void)
 	}
 }
 
+/* End-of-run release for D15B synthesized heap values (leaves whose spec
+ * outgrew the val pool). Kept separate from free_tree so the pre-eval
+ * reset never frees a spec the tree still needs. */
+static void
+qmap_expr_free_heap_values(void)
+{
+	for (int i = 0; i < EXPR_ARENA_CAP; i++) {
+		if (expr_arena[i].heapval) {
+			free((void *)expr_arena[i].value);
+			expr_arena[i].value = NULL;
+			expr_arena[i].heapval = 0;
+		}
+	}
+}
+
 static int
 qmap_expr_parse(const char *expr)
 {
@@ -1911,6 +2177,9 @@ qmap_expr_parse(const char *expr)
 	expr_used = 0;
 	expr_val_used = 0;
 	expr_n = 0;
+	expr_labels_n = 0;
+	rank_override[0] = '\0';
+	qmap_scoped_n = 0;
 	expr_root = NULL;
 
 	lx_next();
@@ -1961,6 +2230,25 @@ qmap_composed_get(void)
 		}
 	}
 
+	/* Label × axis collision (post-parse: labels and axis leaves may
+	 * interleave freely): a label may not shadow a bound axis name, or a
+	 * bare reference to that axis becomes ambiguous with the label. */
+	for (int i = 0; i < expr_used; i++) {
+		if (expr_arena[i].kind != E_LEAF || !expr_arena[i].label[0])
+			continue;
+		for (int j = 0; j < expr_used; j++) {
+			if (expr_arena[j].kind != E_LEAF)
+				continue;
+			if (!strcmp(expr_arena[i].label, expr_arena[j].name)) {
+				fprintf(stderr, "qmap: label '%s' collides with "
+						"axis name '%s'\n",
+						expr_arena[i].label,
+						expr_arena[j].name);
+				exit(EXIT_FAILURE);
+			}
+		}
+	}
+
 	ranker_axis = NULL;
 	ranker_params = NULL;
 	qmap_expr_free_tree();
@@ -1982,7 +2270,47 @@ qmap_composed_get(void)
 	float *scores = NULL;
 	size_t nout = 0;
 
-	if (ranker_axis) {
+	if (ranker_axis || rank_override[0]) {
+		/* D15E: the rank-capable instances of the ranker axis aggregate as
+		 * MAX score per ref (same-axis order-independent). Distinct axes
+		 * keep D2 (first rank-capable axis in preorder wins). --rank@A
+		 * replaces the set with EXACTLY the labeled instance A. */
+		struct { const rec_axis_t *axis; void *params; }
+			ri[EXPR_ARENA_CAP];
+		int rin = 0;
+		if (rank_override[0]) {
+			struct expr_node *def = qmap_expr_label_find(rank_override);
+			int slot = def ? qmap_axes_find_slot(def->name) : -1;
+			const rec_axis_t *ax = slot >= 0 ? rec_axis_get(slot) : NULL;
+			if (!def || def->kind != E_LEAF || !ax || !ax->rank) {
+				fprintf(stderr,
+					"qmap: --rank@%s: not a rank-capable axis\n",
+					rank_override);
+				exit(EXIT_FAILURE);
+			}
+			ri[rin].axis = ax;
+			ri[rin].params = ax->decode
+				? ax->decode(def->value)
+				: (void *)(def->value ? def->value : "");
+			rin++;
+		} else {
+			for (int i = 0; i < expr_used; i++) {
+				struct expr_node *nn = &expr_arena[i];
+				if (nn->kind != E_LEAF)
+					continue;
+				int slot = qmap_axes_find_slot(nn->name);
+				const rec_axis_t *ax = slot >= 0
+					? rec_axis_get(slot) : NULL;
+				if (!ax || ax != ranker_axis || !ax->rank)
+					continue;
+				ri[rin].axis = ax;
+				ri[rin].params = ax->decode
+					? ax->decode(nn->value)
+					: (void *)(nn->value ? nn->value : "");
+				rin++;
+			}
+		}
+
 		size_t k = top_k ? top_k : set_count;
 		rec_rank_t *board = NULL;
 		if (k > 0) {
@@ -1992,11 +2320,19 @@ qmap_composed_get(void)
 		}
 		const rec_ref_t *rrefs = rec_set_at(R);
 		for (size_t i = 0; i < set_count; i++) {
-			float s;
-			if (ranker_axis->rank((void *)ranker_axis->ctx,
-					      ranker_params,
-					      rrefs[i], &s) == 0)
-				rec_rank_push(board, rrefs[i], s);
+			float bs = 0.0f;
+			int got = 0;
+			for (int r = 0; r < rin; r++) {
+				float s;
+				if (ri[r].axis->rank((void *)ri[r].axis->ctx,
+						ri[r].params, rrefs[i], &s) == 0
+						&& (!got || s > bs)) {
+					bs = s;
+					got = 1;
+				}
+			}
+			if (got)
+				rec_rank_push(board, rrefs[i], bs);
 		}
 		if (board)
 			nout = rec_rank_sorted(board, refs, scores);
@@ -2033,6 +2369,7 @@ qmap_composed_get(void)
 	free(refs);
 	free(scores);
 	qmap_expr_free_tree();
+	qmap_expr_free_heap_values();
 	rec_set_free(universe);
 	return EXIT_SUCCESS;
 }
@@ -2123,6 +2460,15 @@ main(int argc, char *argv[])
 				return EXIT_FAILURE;
 			}
 			min_score = b;
+			break;
+		}
+		case CLIP_OPT_RANK: {
+			size_t l = strlen(optarg);
+			if (l == 0 || l > LABEL_MAX) {
+				fprintf(stderr, "qmap: invalid --rank label '%s'\n", optarg);
+				return EXIT_FAILURE;
+			}
+			strcpy(rank_override, optarg);
 			break;
 		}
 	case 'p':
