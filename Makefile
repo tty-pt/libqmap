@@ -1,5 +1,5 @@
 INSTALL_BIN := qmap
-all := libqmap qmap test test_extended test_multivalue test_record rec_test rec_axis_test rec_axis_store_test rec_axis_bench bench_multivalue bench_rec
+all := libqmap qmap test test_extended test_multivalue test_record rec_test rec_axis_test rec_axis_store_test rec_cli_test rec_axis_bench bench_multivalue bench_rec
 
 LDLIBS-libqmap := -lxxhash -lqsys
 LDLIBS-libqmap-Windows := -lmman
@@ -14,6 +14,7 @@ LDLIBS-test_record := -lqmap
 LDLIBS-rec_test := -lqmap
 LDLIBS-rec_axis_test := -lqmap
 LDLIBS-rec_axis_store_test := -lqmap -lqsys
+LDLIBS-rec_cli_test := -lqmap
 LDLIBS-qmap := -lqmap -lqsys
 LDLIBS-save_test := -lqmap
 LDLIBS-librec_axis_mock := -lqmap

@@ -70,7 +70,7 @@ probe_fill(void *ctx, void *params, rec_set_t *out)
 static void *
 probe_decode(const char *s)
 {
-	char *copy;
+	char *out = NULL;
 
 	/* CLI fallback (post-flip bare leaves deliver NULL). */
 	if (!s || !*s)
@@ -79,30 +79,35 @@ probe_decode(const char *s)
 		return NULL;
 
 	/* Scoped flags deliver the stoma-style spec "query='value'"; the
-	 * generic rec_spec_next unwraps the single query key so whole-string
+	 * read-only scan unwraps the single query key so whole-string
 	 * semantics see the raw value ("empty"/"boom"/anything). Probe
 	 * declares only `query`, so there is at most one key; a raw value
-	 * without a key (leaf `pe:boom`) has no '=' token and stays as-is. */
-	copy = strdup(s);
-	if (!copy)
-		return NULL;
-	for (char *cur = copy, *key, *val;
-	     rec_spec_next(&cur, &key, &val); ) {
-		if (val && !strcmp(key, "query")) {
-			/* val points into copy — duplicate it before dropping
-			 * the buffer. */
-			char *q = strdup(val);
+	 * without a key (leaf `pe:boom`) has no '=' token and stays as-is.
+	 * Exactly ONE heap copy on every path — the unwrapped query value
+	 * or the whole spec. */
+	{
+		const char *cur = s, *key, *val;
+		size_t klen, vlen;
+		int quoted;
 
-			if (!q)
-				return NULL;
-			free(copy);
-			copy = q;
-			break;
+		while (rec_spec_scan(&cur, &key, &klen, &val, &vlen,
+				     &quoted)) {
+			if (rec_key_eq(key, klen, "query")) {
+				if (rec_cli_str_dup(val, vlen, quoted,
+						    &out) != 0)
+					return NULL;
+				break;
+			}
 		}
 	}
-	if (!strcmp(copy, "boom"))
+	if (!out) {
+		out = strdup(s);
+		if (!out)
+			return NULL;
+	}
+	if (!strcmp(out, "boom"))
 		fprintf(stderr, "AXIS-BOOM-DECODED\n");
-	return copy;
+	return out;
 }
 
 __attribute__((constructor))

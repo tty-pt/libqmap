@@ -340,8 +340,9 @@ int rec_axis_config_arg(const char *name, const char *value);
 
 (`struct option`-shaped. The decode-spec grammar an axis parses —
 space-separated `key=value` with single-quoted values — is likewise owned
-once by the kernel: `ttypt/rec.h rec_spec_next`. An axis implements only
-its option table plus its per-field mapping in `rec_axis_config_arg` /
+once by the kernel: `ttypt/rec.h rec_spec_scan` (read-only, zero-alloc,
+values returned as length-delimited ranges; pair with `rec_cli_*_b`). An
+axis implements only its option table plus its per-field mapping in `rec_axis_config_arg` /
 decode, routing string/numeric values through the shared
 `rec_cli_str_set` / `rec_cli_int|uint|size|float` helpers.)
 

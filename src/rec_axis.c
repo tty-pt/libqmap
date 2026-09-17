@@ -147,16 +147,16 @@ rec_query_run(const rec_query_t *q, rec_ref_t *refs, float *scores)
 	{
 		size_t n = rec_set_count(r);
 		const rec_ref_t *ra = rec_set_at(r);
+		const rec_axis_t *ax[REC_QUERY_MAX_AXES];
 		int have_consumer = q->consumer_score != NULL;
 		int have_rank = 0;
 		size_t k;
 
 		for (i = 0; i < q->n_axes; i++) {
 			const rec_axis_t *axis = rec_axis_get(q->axes[i].slot);
-			if (axis && axis->rank && axis->ctx) {
+			ax[i] = axis;
+			if (axis && axis->rank && axis->ctx)
 				have_rank = 1;
-				break;
-			}
 		}
 
 		if (!have_consumer && !have_rank) {
@@ -181,8 +181,7 @@ rec_query_run(const rec_query_t *q, rec_ref_t *refs, float *scores)
 					rec_axis_score_t as[REC_QUERY_MAX_AXES];
 					int n_as = 0;
 					for (i = 0; i < q->n_axes; i++) {
-						const rec_axis_t *axis =
-							rec_axis_get(q->axes[i].slot);
+						const rec_axis_t *axis = ax[i];
 						as[n_as].slot = q->axes[i].slot;
 						as[n_as].valid = 0;
 						as[n_as].score = 0.0f;
@@ -199,8 +198,7 @@ rec_query_run(const rec_query_t *q, rec_ref_t *refs, float *scores)
 					/* Fallback: first axis (query order) that has a
 					 * rank fn + ctx. */
 					for (i = 0; i < q->n_axes; i++) {
-						const rec_axis_t *axis =
-							rec_axis_get(q->axes[i].slot);
+						const rec_axis_t *axis = ax[i];
 						if (axis && axis->rank && axis->ctx) {
 							if (axis->rank(axis->ctx,
 							              q->axes[i].params,
