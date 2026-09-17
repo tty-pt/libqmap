@@ -183,6 +183,39 @@ expected="3 3.000000 three
 9"
 assert_eq "interleave" "$expected" "$out"
 
+echo "=== -X needs no -g .: implicit query runs after all ops ==="
+# Scratch filespecs keep demo.db byte-identical for the tail smoke test.
+"$qmap" -p 1:one -p 2:two "$td/impl.db:a:s" >/dev/null
+"$qmap" -p 1:1 -p 2:2 "$td/impl.db-alpha:a:u" >/dev/null
+out=$("$qmap" -X alpha "$td/impl.db:a:s")
+expected="2 2.000000 two
+1 1.000000 one"
+assert_eq "implicit-dot-out" "$expected" "$out"
+
+echo "=== -X no -g .: write-then-query sees the new ref ==="
+"$qmap" -p 1:one -p 2:two "$td/wtq.db:a:s" >/dev/null
+"$qmap" -p 1:1 -p 2:2 "$td/wtq.db-pure:a:u" >/dev/null
+out=$("$qmap" -X pure -p 3:three "$td/wtq.db@pure:a:s")
+expected="3
+1 one
+2 two
+3 three"
+assert_eq "implicit-write-then-query" "$expected" "$out"
+
+echo "=== -X no -g .: classic -g KEY coexists, query still runs ==="
+# -g 1 on an :a: primary is a string-key miss (classic "-1", pinned above);
+# the point is the implicit query still fires after the classic get.
+out=$("$qmap" -X pure -g 1 "$td/wtq.db:a:s")
+expected="-1
+1 one
+2 two
+3 three"
+assert_eq "implicit-coexist-get" "$expected" "$out"
+
+echo "=== -X empty string without -g .: unarmed, quiet ==="
+out=$("$qmap" -X "  " "$td/impl.db:a:s")
+assert_eq "implicit-unarmed" "" "$out"
+
 echo "=== -X unknown axis name: named error, exit 1 ==="
 assert_fails "unknown-axis" "unknown axis name" -X wonka -g . "$td/demo.db:a:s"
 

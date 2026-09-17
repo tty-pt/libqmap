@@ -19,7 +19,7 @@ LDLIBS-save_test := -lqmap
 LDLIBS-librec_axis_mock := -lqmap
 LDLIBS-librec_axis_fold := -lqmap
 
-libqmap-obj-y := src/idm.o src/rec.o src/rec_axis.o
+libqmap-obj-y := src/idm.o src/rec.o src/rec_axis.o src/rec_cli.o
 
 CFLAGS += -g
 

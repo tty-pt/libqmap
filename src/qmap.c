@@ -317,13 +317,8 @@ static const struct option cli_long_opts[] = {
  *    consumption of the FIXED core surface and feed BOTH getopt passes a
  *    dynamic table (optional_argument, shared val CLIP_OPT_PLUGIN) — libc-
  *    portable, keeps `-?`/`-Z` semantics byte-identical. Values point into
- *    argv (stable for the whole run). ── */
-typedef struct rec_axis_cli_option {
-	const char *name;
-	int has_arg;
-	const char *help;
-} rec_axis_cli_option_t;
-
+ *    argv (stable for the whole run). struct rec_axis_cli_option is the
+ *    kernel-owned ABI in <ttypt/rec.h> — never re-declared here. ── */
 #define QMAP_CLI_PLUGIN_CAP 16
 #define QMAP_CLI_PLUGIN_NAME_MAX 63
 #define QMAP_CLI_PLUGIN_OPTS_MAX 8
@@ -448,7 +443,8 @@ usage(char *prog)
 	fprintf(stderr, "        -c KEY           count entries for a key\n");
 	fprintf(stderr, "        -x               when printing associations, bail on first result\n");
 	fprintf(stderr, "        -k               also print keys (for get and rand).\n");
-	fprintf(stderr, "        -X EXPR          composed set query (arms -g .)\n");
+	fprintf(stderr, "        -X EXPR          composed set query (runs at -g . if present,\n");
+	fprintf(stderr, "                         else once after all ops)\n");
 	fprintf(stderr, "                         leaves NAME [label:NAME]; operators ( ) AND OR\n");
 	fprintf(stderr, "                         EXCEPT NOT (uppercase); A EXCEPT B = setminus;\n");
 	fprintf(stderr, "                         NOT X = complement; structure only — parameters go in\n");
@@ -1229,14 +1225,67 @@ qmap_axes_dlopen_env(int quiet)
  * untouched; an option no bound .so declares is a hard error. */
 static void qmap_apply_scoped_flags(void);
 
+/* One dlopen'd plugin's D14 surface (dedupe by handle upstream). */
+struct qmap_cli_plug {
+	void *h;
+	const rec_axis_cli_option_t *opts;
+	int (*cfg)(const char *, const char *);
+};
+
+/* Find base across all plugin option tables (the broadcast loop and the
+ * D15B declared lookup share it). *has_arg is set on a hit. */
+static const rec_axis_cli_option_t *
+qmap_cli_opt_find(const struct qmap_cli_plug *plugs, int nplug,
+		  const char *name, int *has_arg)
+{
+	for (int p = 0; p < nplug; p++) {
+		const rec_axis_cli_option_t *o = plugs[p].opts;
+
+		for (int k = 0; o[k].name && k < QMAP_CLI_PLUGIN_OPTS_MAX; k++) {
+			if (strcmp(o[k].name, name))
+				continue;
+			if (has_arg)
+				*has_arg = o[k].has_arg;
+			return &o[k];
+		}
+	}
+	return NULL;
+}
+
+/* One-line error paths for the plugin-flag passes. Every message keeps its
+ * exact historic text (the shell suites grep stderr); qmap_cli_err adds
+ * usage + exit(1), qmap_cli_fail exits bare. */
+static void
+qmap_cli_err(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	fprintf(stderr, "qmap: ");
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+	fputc('\n', stderr);
+	usage((char *)qmap_cli_prog);
+	exit(EXIT_FAILURE);
+}
+
+static void
+qmap_cli_fail(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	fprintf(stderr, "qmap: ");
+	vfprintf(stderr, fmt, ap);
+	va_end(ap);
+	fputc('\n', stderr);
+	exit(EXIT_FAILURE);
+}
+
 static void
 qmap_cli_plugin_flush(void)
 {
-	struct {
-		void *h;
-		const rec_axis_cli_option_t *opts;
-		int (*cfg)(const char *, const char *);
-	} plugs[QMAP_CLI_PLUGIN_CAP];
+	struct qmap_cli_plug plugs[QMAP_CLI_PLUGIN_CAP];
 	int nplug = 0;
 
 	if (qmap_cli_pn == 0)
@@ -1269,41 +1318,29 @@ qmap_cli_plugin_flush(void)
 	for (int c = 0; c < qmap_cli_pn; c++) {
 		const char *name = qmap_cli_pname[c];
 		const char *value = qmap_cli_pval[c];
-		int found = 0;
+		int has_arg = 0;
+
 		if (strchr(name, '@'))
 			continue;   /* scoped: resolved in the D15B pass below */
+		if (!qmap_cli_opt_find(plugs, nplug, name, &has_arg))
+			qmap_cli_err("unknown option '--%s'", name);
+		if (has_arg && !value)
+			qmap_cli_err("option '--%s' requires --%s=VALUE",
+				     name, name);
+		if (!has_arg && value)
+			qmap_cli_err("option '--%s' takes no value", name);
 		for (int p = 0; p < nplug; p++) {
 			const rec_axis_cli_option_t *o = plugs[p].opts;
-			for (int k = 0; o[k].name && k < QMAP_CLI_PLUGIN_OPTS_MAX; k++) {
+
+			for (int k = 0; o[k].name
+					&& k < QMAP_CLI_PLUGIN_OPTS_MAX; k++) {
 				if (strcmp(o[k].name, name))
 					continue;
-				found = 1;
-				if (o[k].has_arg && !value) {
-					fprintf(stderr,
-						"qmap: option '--%s' requires --%s=VALUE\n",
-						name, name);
-					usage((char *) qmap_cli_prog);
-					exit(EXIT_FAILURE);
-				}
-				if (!o[k].has_arg && value) {
-					fprintf(stderr,
-						"qmap: option '--%s' takes no value\n", name);
-					usage((char *) qmap_cli_prog);
-					exit(EXIT_FAILURE);
-				}
-				if (plugs[p].cfg(name, value) != 0) {
-					fprintf(stderr,
-						"qmap: option '--%s' rejected by axis plugin\n",
+				if (plugs[p].cfg(name, value) != 0)
+					qmap_cli_err(
+						"option '--%s' rejected by axis plugin",
 						name);
-					usage((char *) qmap_cli_prog);
-					exit(EXIT_FAILURE);
-				}
 			}
-		}
-		if (!found) {
-			fprintf(stderr, "qmap: unknown option '--%s'\n", name);
-			usage((char *) qmap_cli_prog);
-			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -1318,86 +1355,47 @@ qmap_cli_plugin_flush(void)
 
 		size_t blen = (size_t)(at - name);
 		const char *scope = at + 1;
-		if (blen == 0 || !*scope) {
-			fprintf(stderr, "qmap: unknown option '--%s'\n", name);
-			usage((char *) qmap_cli_prog);
-			exit(EXIT_FAILURE);
-		}
+		if (blen == 0 || !*scope)
+			qmap_cli_err("unknown option '--%s'", name);
 
 		if (blen == 4 && !strncmp(name, "rank", 4)) {
 			/* Core override: --rank@A forces instance A to rank. */
-			if (!qmap_expr_label_find(scope)) {
-				fprintf(stderr,
-					"qmap: --rank@%s: unknown label '%s'\n",
-					scope, scope);
-				usage((char *) qmap_cli_prog);
-				exit(EXIT_FAILURE);
-			}
-			if (strlen(scope) > LABEL_MAX) {
-				fprintf(stderr, "qmap: --rank@%s: label too long\n",
-						scope);
-				exit(EXIT_FAILURE);
-			}
+			if (!qmap_expr_label_find(scope))
+				qmap_cli_err("--rank@%s: unknown label '%s'",
+					     scope, scope);
+			if (strlen(scope) > LABEL_MAX)
+				qmap_cli_fail("--rank@%s: label too long", scope);
 			strcpy(rank_override, scope);
 			continue;
 		}
 
 		/* base must be a real plugin option taking a value. */
 		char base[QMAP_CLI_PLUGIN_NAME_MAX + 1];
-		if (blen > QMAP_CLI_PLUGIN_NAME_MAX) {
-			fprintf(stderr, "qmap: unknown option '--%s'\n", name);
-			usage((char *) qmap_cli_prog);
-			exit(EXIT_FAILURE);
-		}
+		if (blen > QMAP_CLI_PLUGIN_NAME_MAX)
+			qmap_cli_err("unknown option '--%s'", name);
 		memcpy(base, name, blen);
 		base[blen] = '\0';
-		int declared = 0, has_arg = 0;
-		for (int p = 0; p < nplug && !declared; p++)
-			for (int k = 0; plugs[p].opts[k].name
-					&& k < QMAP_CLI_PLUGIN_OPTS_MAX; k++)
-				if (!strcmp(plugs[p].opts[k].name, base)) {
-					declared = 1;
-					has_arg = plugs[p].opts[k].has_arg;
-					break;
-				}
-		if (!declared) {
-			fprintf(stderr, "qmap: unknown option '--%s'\n", name);
-			usage((char *) qmap_cli_prog);
-			exit(EXIT_FAILURE);
-		}
-		if (!has_arg) {
-			fprintf(stderr, "qmap: option '--%s' takes no value\n", name);
-			usage((char *) qmap_cli_prog);
-			exit(EXIT_FAILURE);
-		}
-		if (!value) {
-			fprintf(stderr,
-				"qmap: option '--%s' requires --%s=VALUE\n",
-				name, name);
-			usage((char *) qmap_cli_prog);
-			exit(EXIT_FAILURE);
-		}
-		if (qmap_scoped_n >= QMAP_SCOPED_CAP) {
-			fprintf(stderr, "qmap: too many scoped options (max %d)\n",
-					QMAP_SCOPED_CAP);
-			exit(EXIT_FAILURE);
-		}
+		int has_arg = 0;
+		if (!qmap_cli_opt_find(plugs, nplug, base, &has_arg))
+			qmap_cli_err("unknown option '--%s'", name);
+		if (!has_arg)
+			qmap_cli_err("option '--%s' takes no value", name);
+		if (!value)
+			qmap_cli_err("option '--%s' requires --%s=VALUE",
+				     name, name);
+		if (qmap_scoped_n >= QMAP_SCOPED_CAP)
+			qmap_cli_fail("too many scoped options (max %d)",
+				      QMAP_SCOPED_CAP);
 		struct qmap_scoped *sc = &qmap_scoped[qmap_scoped_n];
 		sc->is_axis = 0;
 		if (qmap_expr_label_find(scope))
 			;                       /* exact labeled instance */
 		else if (qmap_axes_find_slot(scope) >= 0)
 			sc->is_axis = 1;       /* every bare instance of the axis */
-		else {
-			fprintf(stderr, "qmap: unknown label or axis '%s'\n", scope);
-			usage((char *) qmap_cli_prog);
-			exit(EXIT_FAILURE);
-		}
-		if (strlen(scope) > LABEL_MAX) {
-			fprintf(stderr, "qmap: --%s: scope '%s' too long\n",
-					base, scope);
-			exit(EXIT_FAILURE);
-		}
+		else
+			qmap_cli_err("unknown label or axis '%s'", scope);
+		if (strlen(scope) > LABEL_MAX)
+			qmap_cli_fail("--%s: scope '%s' too long", base, scope);
 		strcpy(sc->label, scope);
 		strcpy(sc->base, base);
 		sc->value = value;
@@ -2389,6 +2387,7 @@ main(int argc, char *argv[])
 	char *fname = NULL;
 	int ch;
 	int rc = EXIT_SUCCESS;
+	int query_ran = 0; /* set when an explicit -g . runs the query */
 	uint32_t flags = QH_RDONLY, aux;
 
 	if (argc < 2) {
@@ -2524,9 +2523,10 @@ main(int argc, char *argv[])
 	case 'd': rc |= gen_del(); break;
 	case 'D': rc |= gen_del_all(); break;
 	case 'g':
-		if (!strcmp(optarg, ".") && expr_root)
+		if (!strcmp(optarg, ".") && expr_root) {
 			rc = qmap_composed_get();
-		else
+			query_ran = 1;
+		} else
 			gen_get(optarg);
 		break;
 	case 'm': gen_multi(); break;
@@ -2536,5 +2536,9 @@ main(int argc, char *argv[])
 	case CLIP_OPT_TOP: case CLIP_OPT_BOTTOM: break;
 	case CLIP_OPT_LIST_AXES: case CLIP_OPT_PLUGIN: break;
 	}
+	/* An armed -X needs no -g .: run the composed query once after all
+	 * ops when no explicit -g . already ran it at argv position. */
+	if (expr_root && !query_ran)
+		rc |= qmap_composed_get();
 	return rc;
 }

@@ -25,12 +25,6 @@
  * probe_decode must fall back to the CLI value when s == NULL. */
 static char *probe_cli_query;
 
-struct rec_axis_cli_option {
-	const char *name;
-	int has_arg;
-	const char *help;
-};
-
 const struct rec_axis_cli_option *
 rec_axis_cli_options(void)
 {
@@ -44,18 +38,10 @@ rec_axis_cli_options(void)
 int
 rec_axis_config_arg(const char *name, const char *value)
 {
-	char *copy;
-
 	if (!name || !value)
 		return -1;
-	if (!strcmp(name, "query")) {
-		copy = strdup(value);
-		if (!copy)
-			return -1;
-		free(probe_cli_query);
-		probe_cli_query = copy;
-		return 0;
-	}
+	if (!strcmp(name, "query"))
+		return rec_cli_str_set(&probe_cli_query, value);
 	return -1;
 }
 
@@ -92,31 +78,28 @@ probe_decode(const char *s)
 	if (!s)
 		return NULL;
 
-	/* Scoped flags deliver the stoma-style spec "query='value'"; unwrap
-	 * the single query key so whole-string semantics see the raw value
-	 * ("empty"/"boom"/anything). Probe declares only `query`, so there is
-	 * at most one key. */
-	if (!strncmp(s, "query=", 6)) {
-		s += 6;
-		if (*s == '\'') {
-			const char *e = strrchr(s, '\'');
-			if (e && e != s) {
-				size_t n = (size_t)(e - s - 1);
-
-				copy = malloc(n + 1);
-				if (!copy)
-					return NULL;
-				memcpy(copy, s + 1, n);
-				copy[n] = '\0';
-				if (!strcmp(copy, "boom"))
-					fprintf(stderr, "AXIS-BOOM-DECODED\n");
-				return copy;
-			}
-		}
-	}
+	/* Scoped flags deliver the stoma-style spec "query='value'"; the
+	 * generic rec_spec_next unwraps the single query key so whole-string
+	 * semantics see the raw value ("empty"/"boom"/anything). Probe
+	 * declares only `query`, so there is at most one key; a raw value
+	 * without a key (leaf `pe:boom`) has no '=' token and stays as-is. */
 	copy = strdup(s);
 	if (!copy)
 		return NULL;
+	for (char *cur = copy, *key, *val;
+	     rec_spec_next(&cur, &key, &val); ) {
+		if (val && !strcmp(key, "query")) {
+			/* val points into copy — duplicate it before dropping
+			 * the buffer. */
+			char *q = strdup(val);
+
+			if (!q)
+				return NULL;
+			free(copy);
+			copy = q;
+			break;
+		}
+	}
 	if (!strcmp(copy, "boom"))
 		fprintf(stderr, "AXIS-BOOM-DECODED\n");
 	return copy;

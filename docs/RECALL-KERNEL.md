@@ -332,13 +332,18 @@ whole-sentence or runtime values that do not belong in the `-X` expression
 structure or the roster. An axis **may** additionally export:
 
 ```c
+/* kernel-owned ABI — ttypt/rec.h, visible to every TU, never re-declared */
 struct rec_axis_cli_option { const char *name; int has_arg; const char *help; };
 const struct rec_axis_cli_option *rec_axis_cli_options(void);
 int rec_axis_config_arg(const char *name, const char *value);
 ```
 
-(`struct option`-shaped; each side defines its own layout — the two are
-never compiled together.)
+(`struct option`-shaped. The decode-spec grammar an axis parses —
+space-separated `key=value` with single-quoted values — is likewise owned
+once by the kernel: `ttypt/rec.h rec_spec_next`. An axis implements only
+its option table plus its per-field mapping in `rec_axis_config_arg` /
+decode, routing string/numeric values through the shared
+`rec_cli_str_set` / `rec_cli_int|uint|size|float` helpers.)
 
 Contract:
 

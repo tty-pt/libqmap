@@ -213,6 +213,18 @@ else
 1 0.906867 2026-09-13T20:00:00:Beacon Harbor lights"
 	assert_eq "sepal-floats" "$expected" "$out"
 
+	echo "=== scoped --min-sim@A over sepal: parity with unscoped ==="
+	# D15 scoped synth emits min-sim='…' as a leaf decode key; sepal decode
+	# must map it (regression: decode only matched min_sim, so a scoped
+	# threshold was silently ignored). 0.95 excludes ref 1 (0.9069) but not
+	# ref 3 (1.0) — a floor that only a WORKING scoped min-sim can strip.
+	out=$("$qmap" -X 'A:sepal' -g . --file="$qvec" --qdim="$qdim" \
+		--m=2 --min-sim@A=0.95 -t 100 "$roster" 2>"$td/s3.err")
+	echo "--- scoped min-sim stderr ---"; cat "$td/s3.err"
+	echo "--- scoped min-sim stdout ---"; printf '%s\n' "$out"
+	expected="3 1.000000 2026-09-14T12:00:00:Beacon Harbor lights"
+	assert_eq "sepal-scoped-min-sim" "$expected" "$out"
+
 	echo "=== two rankers, one expression: first rank-capable leaf in preorder wins (D2) ==="
 	# stoma query is scoped (its field/query would otherwise collide on the
 	# shared broadcast --query); sepal takes unscoped file/qdim/m/min-sim.
@@ -227,7 +239,22 @@ else
 	# asc ref.
 	expected="1 0.125000 2026-09-13T20:00:00:Beacon Harbor lights
 3 0.125000 2026-09-14T12:00:00:Beacon Harbor lights"
-	assert_eq "stoma-over-sepal" "$expected" "$out"
+ 	assert_eq "stoma-over-sepal" "$expected" "$out"
+fi
+
+echo "=== sepal column without -g .: implicit query, same rows ==="
+# Env-proof parity: whatever the with-dot run answers (floats or embed),
+# the implicit end-run must answer byte-identical.
+out_dot=$("$qmap" -X 'sepal' -g . --file="$qvec" --qdim="$qdim" --m=2 \
+	--min-sim=0.5 -t 100 "$roster" 2>/dev/null)
+out_impl=$("$qmap" -X 'sepal' --file="$qvec" --qdim="$qdim" --m=2 \
+	--min-sim=0.5 -t 100 "$roster" 2>/dev/null)
+assert_eq "sepal-implicit-parity" "$out_dot" "$out_impl"
+if [ -z "$out_impl" ]; then
+	echo "FAIL - sepal-implicit-nonempty (no rows)"
+	fail=1
+else
+	echo "ok - sepal-implicit-nonempty"
 fi
 
 echo "=== scoped labeled instances over real axes (stoma) ==="
@@ -263,6 +290,16 @@ out=$("$qmap" -X 'A:stoma' -g . '--query@A=harbor lights' -t 10 "$roster" 2>/dev
 expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
 3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
 assert_eq "scoped-quoted-space" "$expected" "$out"
+
+echo "=== scoped empty field= keeps the text default over CLI --field ==="
+# Regression: an empty leaf field= must resolve to the "text" default even
+# when a CLI --field is set (leaf wins, even when empty). The buggy merge
+# lets the CLI "title" through → no rows (title is empty in this roster).
+out=$("$qmap" -X 'A:stoma' -g . --query@A=beacon --field@A= --field=title \
+	-t 10 "$roster" 2>/dev/null)
+expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
+3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
+assert_eq "scoped-empty-field-default" "$expected" "$out"
 
 echo "=== scoped joint via since=/until= aliases (a=/b= in the leaf) ==="
 # D15 decode alias: --since@A/--until@A synthesize since=/until= leaf

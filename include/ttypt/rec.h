@@ -224,6 +224,52 @@ int rec_query_run(const rec_query_t *q, rec_ref_t *refs, float *scores);
 
 /** @} */
 
+/** @defgroup rec_axis_cli Axis CLI contract (D14/D15B)
+ *  The kernel owns the axis-CLI ABI and the decode-spec grammar exactly
+ *  once (implementation: libqmap src/rec_cli.c). An axis implements only
+ *  its option table (rec_axis_cli_options) and its per-field mapping in
+ *  rec_axis_config_arg / decode. Layouts are visible to every TU via this
+ *  header — never re-declared locally.
+ *  @{
+ */
+
+/** One --NAME=VALUE option a plugin contributes to the kernel CLI
+ *  (getopt-compatible: --NAME requires --NAME=VALUE when has_arg != 0). */
+struct rec_axis_cli_option {
+	const char *name;
+	int has_arg;
+	const char *help;
+};
+typedef struct rec_axis_cli_option rec_axis_cli_option_t;
+
+/** One pass over a caller-owned, NUL-terminated, MUTABLE decode-spec
+ *  buffer: advance *cur past each key=value pair, point key at the key
+ *  (start of the token, spaces skipped) and val at the value (unescaped
+ *  IN PLACE, NUL-terminated). Grammar: space-separated tokens; a token
+ *  without '=' is skipped and scanning continues; a value is bare
+ *  (to the next space) or single-quoted with backslash escapes
+ *  ('\\'→'\', '\''→'\''; lenient on an unterminated quote — consumes the
+ *  tail). val is NULL when the scanned token had no '='. Returns 1 while a
+ *  key=value pair was produced, 0 at the end of the string. Use:
+ *      char *copy = strdup(spec);
+ *      for (char *cur = copy; rec_spec_next(&cur, &key, &val); ) { … }
+ *  The buffer stays owned by the caller for the whole pass. */
+int rec_spec_next(char **cur, char **key, char **val);
+
+/** Owned string setter for rec_axis_config_arg string fields: strdup then
+ *  free-replace into *dst. 0 ok / -1 on NULL dst/value or allocation. */
+int rec_cli_str_set(char **dst, const char *value);
+
+/** Strict decimal parsers for rec_axis_config_arg numeric fields:
+ *  errno-cleared strto*, reject empty/trailing-junk/overflow, and a
+ *  leading '-' for the unsigned ones. */
+int rec_cli_int(const char *v, int *out);
+int rec_cli_uint(const char *v, unsigned *out);
+int rec_cli_size(const char *v, size_t *out);
+int rec_cli_float(const char *v, float *out);
+
+/** @} */
+
 #ifdef __cplusplus
 }
 #endif

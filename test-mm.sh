@@ -116,6 +116,12 @@ out=$("$qmap" -X "$expr" -g . --since=2026-09-14 --until=2026-09-16 \
 assert_eq "composed-and" "1 0.166667 2026-09-13:Beacon Harbor lights
 3 0.166667 2026-09-15:beacon beacon harbor" "$out"
 
+echo "=== composed search without -g .: implicit query ==="
+out=$("$qmap" -X "$expr" --since=2026-09-14 --until=2026-09-16 \
+	--query=beacon --field=text --matched=1 "$td/m.db:a:s" -t 10 2>/dev/null)
+assert_eq "composed-and-implicit" "1 0.166667 2026-09-13:Beacon Harbor lights
+3 0.166667 2026-09-15:beacon beacon harbor" "$out"
+
 echo "=== pure-filter joint-only search (no score columns) ==="
 out=$("$qmap" -X 'joint' -g . --since=0 --until=2026-09-14 "$td/m.db:a:s" 2>/dev/null)
 assert_eq "joint-before" "1 2026-09-13:Beacon Harbor lights" "$out"

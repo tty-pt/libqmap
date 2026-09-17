@@ -180,13 +180,8 @@ rec_axis_readback(void *ctx, rec_ref_t ref, char **blob_out, size_t *n_out)
 
 /* ── D14 CLI-option convention: declared surface + per-option delivery.
  *    Same optional dlsym pattern as rec_axis_env_config — the qmap CLI is
- *    axis-agnostic and never declares/calls these itself. ── */
-
-struct rec_axis_cli_option {
-	const char *name;
-	int has_arg;
-	const char *help;
-};
+ *    axis-agnostic and never declares/calls these itself. The option
+ *    struct ABI is kernel-owned in <ttypt/rec.h>. ── */
 
 const struct rec_axis_cli_option *
 rec_axis_cli_options(void)
