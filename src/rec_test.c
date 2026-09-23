@@ -1,5 +1,5 @@
 #include "./../include/ttypt/rec.h"
-#include "./../include/ttypt/qmap.h"
+#include "./../include/ttypt/corm.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -168,53 +168,53 @@ test_joins_require_sealed(void)
 }
 
 static void
-test_fill_qmap_iter(void)
+test_fill_corm_iter(void)
 {
-	printf("=== 1A fill_qmap_iter (u32 keys) ===\n");
-	uint32_t kt = qmap_reg(sizeof(uint32_t));
-	uint32_t hd = qmap_open(NULL, NULL, kt, kt, 0xFF, QM_SORTED);
+	printf("=== 1A fill_corm_iter (u32 keys) ===\n");
+	uint32_t kt = corm_reg(sizeof(uint32_t));
+	uint32_t hd = corm_open(NULL, NULL, kt, kt, 0xFF, CM_SORTED);
 	for (uint32_t i = 0; i < 50; i++)
-		qmap_put(hd, &i, &i);
+		corm_put(hd, &i, &i);
 	rec_set_t *s = rec_set_new();
-	ASSERT(rec_set_fill_qmap_iter(s, hd) == 0, "fill ok");
+	ASSERT(rec_set_fill_corm_iter(s, hd) == 0, "fill ok");
 	rec_set_seal(s);
 	ASSERT(rec_set_count(s) == 50, "50 keys drained");
 	const rec_ref_t *got = rec_set_at(s);
 	ASSERT(got[0] == 0 && got[1] == 1 && got[2] == 2 && got[49] == 49,
 	       "drained keys sorted 0..49");
 	rec_set_free(s);
-	qmap_close(hd);
+	corm_close(hd);
 }
 
 static void
-test_fill_qmap_iter_multivalue(void)
+test_fill_corm_iter_multivalue(void)
 {
-	printf("=== 1A fill_qmap_iter duplicates ===\n");
-	uint32_t kt = qmap_reg(sizeof(uint32_t));
-	uint32_t hd = qmap_open(NULL, NULL, kt, kt, 0xFF, QM_SORTED | QM_MULTIVALUE);
+	printf("=== 1A fill_corm_iter duplicates ===\n");
+	uint32_t kt = corm_reg(sizeof(uint32_t));
+	uint32_t hd = corm_open(NULL, NULL, kt, kt, 0xFF, CM_SORTED | CM_MULTIVALUE);
 	rec_ref_t r = 7;
-	qmap_put(hd, &r, &r);
-	qmap_put(hd, &r, &r);
+	corm_put(hd, &r, &r);
+	corm_put(hd, &r, &r);
 	r = 3;
-	qmap_put(hd, &r, &r);
+	corm_put(hd, &r, &r);
 	rec_set_t *s = rec_set_new();
-	rec_set_fill_qmap_iter(s, hd);
+	rec_set_fill_corm_iter(s, hd);
 	rec_set_seal(s);
 	EXPECT_SET(s, 3, 7);           /* dedup after fill */
 	rec_set_free(s);
-	qmap_close(hd);
+	corm_close(hd);
 }
 
 static void
-test_fill_qmap_iter_rejects_variable(void)
+test_fill_corm_iter_rejects_variable(void)
 {
-	printf("=== 1A fill_qmap_iter variable keys ===\n");
-	uint32_t hd = qmap_open(NULL, NULL, QM_STR, QM_STR, 0xFF, 0);
-	qmap_put(hd, "k", "v");
+	printf("=== 1A fill_corm_iter variable keys ===\n");
+	uint32_t hd = corm_open(NULL, NULL, CM_STR, CM_STR, 0xFF, 0);
+	corm_put(hd, "k", "v");
 	rec_set_t *s = rec_set_new();
-	ASSERT(rec_set_fill_qmap_iter(s, hd) != 0, "variable keys rejected");
+	ASSERT(rec_set_fill_corm_iter(s, hd) != 0, "variable keys rejected");
 	rec_set_free(s);
-	qmap_close(hd);
+	corm_close(hd);
 }
 
 static void
@@ -459,9 +459,9 @@ main(void)
 	test_subtract();
 	test_union();
 	test_joins_require_sealed();
-	test_fill_qmap_iter();
-	test_fill_qmap_iter_multivalue();
-	test_fill_qmap_iter_rejects_variable();
+	test_fill_corm_iter();
+	test_fill_corm_iter_multivalue();
+	test_fill_corm_iter_rejects_variable();
 	test_arena_growth();
 	test_big_merges();
 

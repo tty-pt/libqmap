@@ -5,12 +5,12 @@
 # SAME refs (1/2/3), stoma rebuilt from the primary at each open (never
 # files). Also asserts: plain -g answers with zero plugins on a fresh
 # primary, sepal offline floats-direct (the string→embed→ANN column is
-# skipped unless QMAP_SEPAL_EMBED_URL+MODEL are both set — D8), the
+# skipped unless CORM_SEPAL_EMBED_URL+MODEL are both set — D8), the
 # stoma rebuild budget note is measured + recorded (mm-plan U4), and the
 # 2B-6 D2 rank pin (first rank-capable leaf in preorder wins when two
 # rankers share one -X expression: stoma over sepal cosine).
 #
-# Requires the four real axis .so's; resolved from $QMAP_AXIS_REAL_LIBS
+# Requires the four real axis .so's; resolved from $CORM_AXIS_REAL_LIBS
 # (colon list, default = the in-site submodule builds under
 # external/lib{joint,islet,sepal,stoma}/lib, relative to this script).
 # Fresh local builds only (D4) — nothing installed.
@@ -19,7 +19,7 @@ td=$(mktemp -d)
 trap 'rm -rf "$td"' EXIT
 
 export LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH
-qmap=./bin/qmap
+corm=./bin/corm
 fail=0
 
 assert_eq() {
@@ -63,9 +63,9 @@ assert_ok() {
 
 # --- resolve the real axis lib dirs (fresh local builds, D4) ---
 # Default: the in-site submodule builds, relative to this script (explicit
-# $QMAP_AXIS_REAL_LIBS still overrides).
+# $CORM_AXIS_REAL_LIBS still overrides).
 script_dir=$(dirname "$0")
-real_libs=${QMAP_AXIS_REAL_LIBS:-$script_dir/../libjoint/lib:$script_dir/../libislet/lib:$script_dir/../libsepal/lib:$script_dir/../libstoma/lib}
+real_libs=${CORM_AXIS_REAL_LIBS:-$script_dir/../libjoint/lib:$script_dir/../libislet/lib:$script_dir/../libsepal/lib:$script_dir/../libstoma/lib}
 axis_path=""
 oIFS=$IFS
 IFS=:
@@ -74,7 +74,7 @@ for d in $real_libs; do
 	axis_path="$axis_path${axis_path:+:}$d"
 done
 IFS=$oIFS
-export QMAP_AXIS_PATH=$axis_path
+export CORM_AXIS_PATH=$axis_path
 export LD_LIBRARY_PATH=$axis_path:$LD_LIBRARY_PATH
 
 echo "=== preflight: real axis .so ==="
@@ -93,7 +93,7 @@ for a in joint islet sepal stoma; do
 	if [ "$found" = "1" ]; then
 		echo "ok - lib$a.so present"
 	else
-		echo "FAIL - lib$a.so: not found in QMAP_AXIS_PATH ($axis_path)"
+		echo "FAIL - lib$a.so: not found in CORM_AXIS_PATH ($axis_path)"
 		missing=1
 	fi
 done
@@ -109,11 +109,11 @@ cc -o "$td/real_seed" tests/real_seed.c -Iinclude -ldl 2>"$td/cc.err" \
 echo "ok - seeder compiled"
 
 echo "=== seeding (explicit refs 1/2/3 into primary + axes) ==="
-"$qmap" -p 1:"2026-09-13T20:00:00:Beacon Harbor lights" \
+"$corm" -p 1:"2026-09-13T20:00:00:Beacon Harbor lights" \
         -p 2:"2026-09-15T08:00:00:alpha omega" \
         -p 3:"2026-09-14T12:00:00:Beacon Harbor lights" \
         "$td/greps.db:a:s" >/dev/null
-"$qmap" -p 1:plain -p 2:records "$td/fresh.db:a:s" >/dev/null
+"$corm" -p 1:plain -p 2:records "$td/fresh.db:a:s" >/dev/null
 "$td/real_seed" "$axis_path" "$td/greps.db" 2>"$td/seed.err" || { cat "$td/seed.err"; echo "FAIL - seeding"; exit 1; }
 echo "ok - seeded"
 
@@ -127,8 +127,8 @@ else
 fi
 
 echo "=== embed column ==="
-if [ -n "$QMAP_SEPAL_EMBED_URL" ] && [ -n "$QMAP_SEPAL_EMBED_MODEL" ]; then
-	echo "embed mode (QMAP_SEPAL_EMBED_URL+MODEL set)"
+if [ -n "$CORM_SEPAL_EMBED_URL" ] && [ -n "$CORM_SEPAL_EMBED_MODEL" ]; then
+	echo "embed mode (CORM_SEPAL_EMBED_URL+MODEL set)"
 else
 	echo "ok - floats-direct column (offline default; embed skipped)"
 fi
@@ -136,7 +136,7 @@ fi
 roster="$td/greps.db@joint,islet,sepal,stoma:a:s"
 
 echo "=== first @ invocation: loud, never silent ==="
-out=$("$qmap" --list-axes "$roster" 2>"$td/list1.err")
+out=$("$corm" --list-axes "$roster" 2>"$td/list1.err")
 echo "--- prime stderr ---"; cat "$td/list1.err"
 # The roster sidecar is exit-flushed, so the first-ever @ invocation cannot
 # see it: the CLI says so (alongside-heuristic) and stoma says so too.
@@ -157,7 +157,7 @@ else
 fi
 
 echo "=== --list-axes with @ roster (all four real axes bound) ==="
-out=$("$qmap" --list-axes "$roster" 2>"$td/list2.err")
+out=$("$corm" --list-axes "$roster" 2>"$td/list2.err")
 echo "--- bound stderr ---"; cat "$td/list2.err"
 expected="slot  name              fill  rank  ctx
 0     joint             y     n     y
@@ -177,7 +177,7 @@ fi
 echo "=== space ∩ time ∩ text: the conjunctive winner ==="
 # Post-flip structure-only -X; every parameter rides scoped flags.
 expr='(A:joint AND B:islet) AND C:stoma'
-out=$("$qmap" -X "$expr" -g . --since@A=2026-09-14 --until@A=2026-09-15 \
+out=$("$corm" -X "$expr" -g . --since@A=2026-09-14 --until@A=2026-09-15 \
 	--dim@B=2 --s@B=9,1 --l@B=1,1 --query@C=beacon --field@C=text \
 	--matched@C=1 -t 100 "$roster" 2>"$td/q.err")
 echo "--- query stderr ---"; cat "$td/q.err"
@@ -186,11 +186,11 @@ expected="3 0.125000 2026-09-14T12:00:00:Beacon Harbor lights"
 assert_eq "winner" "$expected" "$out"
 
 echo "=== sepal column query ==="
-out=$("$qmap" -X 'sepal' -g . --file="$qvec" --qdim="$qdim" --m=2 \
+out=$("$corm" -X 'sepal' -g . --file="$qvec" --qdim="$qdim" --m=2 \
 	--min-sim=0.5 -t 100 "$roster" 2>"$td/s.err")
 echo "--- sepal stderr ---"; cat "$td/s.err"
 echo "--- sepal stdout ---"; printf '%s\n' "$out"
-if [ -n "$QMAP_SEPAL_EMBED_URL" ] && [ -n "$QMAP_SEPAL_EMBED_MODEL" ]; then
+if [ -n "$CORM_SEPAL_EMBED_URL" ] && [ -n "$CORM_SEPAL_EMBED_MODEL" ]; then
 	# Env-gated embed column (ANN over embedded strings): the values are
 	# endpoint-produced, so this case stays structural — exit 0, the hook
 	# configured cleanly (no inconsistent-pair warning), and the query
@@ -218,7 +218,7 @@ else
 	# must map it (regression: decode only matched min_sim, so a scoped
 	# threshold was silently ignored). 0.95 excludes ref 1 (0.9069) but not
 	# ref 3 (1.0) — a floor that only a WORKING scoped min-sim can strip.
-	out=$("$qmap" -X 'A:sepal' -g . --file="$qvec" --qdim="$qdim" \
+	out=$("$corm" -X 'A:sepal' -g . --file="$qvec" --qdim="$qdim" \
 		--m=2 --min-sim@A=0.95 -t 100 "$roster" 2>"$td/s3.err")
 	echo "--- scoped min-sim stderr ---"; cat "$td/s3.err"
 	echo "--- scoped min-sim stdout ---"; printf '%s\n' "$out"
@@ -229,7 +229,7 @@ else
 	# stoma query is scoped (its field/query would otherwise collide on the
 	# shared broadcast --query); sepal takes unscoped file/qdim/m/min-sim.
 	sexpr2='C:stoma AND sepal'
-	out=$("$qmap" -X "$sexpr2" -g . --query@C=beacon --field@C=text \
+	out=$("$corm" -X "$sexpr2" -g . --query@C=beacon --field@C=text \
 		--matched@C=1 --file="$qvec" --qdim="$qdim" --m=2 --min-sim=0.5 \
 		-t 100 "$roster" 2>"$td/s2.err")
 	echo "--- two-rank stderr ---"; cat "$td/s2.err"
@@ -245,9 +245,9 @@ fi
 echo "=== sepal column without -g .: implicit query, same rows ==="
 # Env-proof parity: whatever the with-dot run answers (floats or embed),
 # the implicit end-run must answer byte-identical.
-out_dot=$("$qmap" -X 'sepal' -g . --file="$qvec" --qdim="$qdim" --m=2 \
+out_dot=$("$corm" -X 'sepal' -g . --file="$qvec" --qdim="$qdim" --m=2 \
 	--min-sim=0.5 -t 100 "$roster" 2>/dev/null)
-out_impl=$("$qmap" -X 'sepal' --file="$qvec" --qdim="$qdim" --m=2 \
+out_impl=$("$corm" -X 'sepal' --file="$qvec" --qdim="$qdim" --m=2 \
 	--min-sim=0.5 -t 100 "$roster" 2>/dev/null)
 assert_eq "sepal-implicit-parity" "$out_dot" "$out_impl"
 if [ -z "$out_impl" ]; then
@@ -261,32 +261,32 @@ echo "=== scoped labeled instances over real axes (stoma) ==="
 # D15: two stoma instances in one expression, each with its OWN scoped
 # query (beacon → {1,3}, alpha → {2}). Same-axis rankers aggregate by
 # max score per ref, so OR prints all three, tie → asc ref.
-out=$("$qmap" -X 'A:stoma OR B:stoma' -g . --query@A=beacon \
+out=$("$corm" -X 'A:stoma OR B:stoma' -g . --query@A=beacon \
 	--query@B=alpha -t 10 "$roster" 2>"$td/l1.err")
 expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
 2 0.000000 2026-09-15T08:00:00:alpha omega
 3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
 assert_eq "scoped-or" "$expected" "$out"
 
-out=$("$qmap" -X 'A:stoma EXCEPT B:stoma' -g . --query@A=beacon \
+out=$("$corm" -X 'A:stoma EXCEPT B:stoma' -g . --query@A=beacon \
 	--query@B=alpha -t 10 "$roster" 2>/dev/null)
 expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
 3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
 assert_eq "scoped-except" "$expected" "$out"
 
-out=$("$qmap" -X 'NOT (A:stoma)' -g . --query@A=alpha -t 10 "$roster" 2>/dev/null)
+out=$("$corm" -X 'NOT (A:stoma)' -g . --query@A=alpha -t 10 "$roster" 2>/dev/null)
 expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
 3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
 assert_eq "scoped-not" "$expected" "$out"
 
 echo "=== E_REF backward-only references (real stoma) ==="
-out=$("$qmap" -X 'A:stoma AND A' -g . --query@A=beacon -t 10 "$roster" 2>/dev/null)
+out=$("$corm" -X 'A:stoma AND A' -g . --query@A=beacon -t 10 "$roster" 2>/dev/null)
 expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
 3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
 assert_eq "eref-self" "$expected" "$out"
 
 echo "=== quoted value with spaces survives the synth (stoma) ==="
-out=$("$qmap" -X 'A:stoma' -g . '--query@A=harbor lights' -t 10 "$roster" 2>/dev/null)
+out=$("$corm" -X 'A:stoma' -g . '--query@A=harbor lights' -t 10 "$roster" 2>/dev/null)
 expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
 3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
 assert_eq "scoped-quoted-space" "$expected" "$out"
@@ -295,7 +295,7 @@ echo "=== scoped empty field= keeps the text default over CLI --field ==="
 # Regression: an empty leaf field= must resolve to the "text" default even
 # when a CLI --field is set (leaf wins, even when empty). The buggy merge
 # lets the CLI "title" through → no rows (title is empty in this roster).
-out=$("$qmap" -X 'A:stoma' -g . --query@A=beacon --field@A= --field=title \
+out=$("$corm" -X 'A:stoma' -g . --query@A=beacon --field@A= --field=title \
 	-t 10 "$roster" 2>/dev/null)
 expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
 3 0.000000 2026-09-14T12:00:00:Beacon Harbor lights"
@@ -305,18 +305,18 @@ echo "=== scoped joint via since=/until= aliases (a=/b= in the leaf) ==="
 # D15 decode alias: --since@A/--until@A synthesize since=/until= leaf
 # keys, which joint_decode accepts alongside a=/b=. A ⊂ {1,3}; E_REF
 # re-uses A's set (AND is a no-op); NOT moves to the complement.
-out=$("$qmap" -X 'A:joint AND A' -g . --since@A=2026-09-14 \
+out=$("$corm" -X 'A:joint AND A' -g . --since@A=2026-09-14 \
 	--until@A=2026-09-15 -t 10 "$roster" 2>/dev/null)
 expected="1 2026-09-13T20:00:00:Beacon Harbor lights
 3 2026-09-14T12:00:00:Beacon Harbor lights"
 assert_eq "joint-scoped-eref" "$expected" "$out"
 
-out=$("$qmap" -X 'NOT (A:joint)' -g . --since@A=2026-09-14 \
+out=$("$corm" -X 'NOT (A:joint)' -g . --since@A=2026-09-14 \
 	--until@A=2026-09-15 -t 10 "$roster" 2>/dev/null)
 expected="2 2026-09-15T08:00:00:alpha omega"
 assert_eq "joint-scoped-not" "$expected" "$out"
 
-out=$("$qmap" -X 'A:joint OR B:joint' -g . --since@A=2026-09-14 \
+out=$("$corm" -X 'A:joint OR B:joint' -g . --since@A=2026-09-14 \
 	--until@A=2026-09-15 --since@B=2026-09-15 --until@B=2026-09-16 \
 	-t 10 "$roster" 2>/dev/null)
 expected="1 2026-09-13T20:00:00:Beacon Harbor lights
@@ -328,19 +328,19 @@ echo "=== escape roundtrips through the real stoma tokenizer ==="
 # Second primary whose text carries an apostrophe and a backslash; the
 # scoped values must arrive byte-identical (synth escapes, stoma decode
 # unescapes). Timestamp prefixes keep the joint column parseable.
-"$qmap" -p 1:"2026-09-13T00:00:00:plain record" \
+"$corm" -p 1:"2026-09-13T00:00:00:plain record" \
 	-p 2:"2026-09-14T00:00:00:don't stop thinking" \
 	-p 3:"2026-09-15T00:00:00:back\\slash path" \
 	"$td/esc.db:a:s" >/dev/null
 "$td/real_seed" "$axis_path" "$td/esc.db" 2>"$td/esc-seed.err" \
 	|| { cat "$td/esc-seed.err"; echo "FAIL - esc seeding"; fail=1; }
 esc_roster="$td/esc.db@joint,islet,sepal,stoma:a:s"
-"$qmap" --list-axes "$esc_roster" >/dev/null 2>/dev/null
-out=$("$qmap" -X 'A:stoma' -g . "--query@A=don't" -t 10 "$esc_roster" 2>/dev/null)
+"$corm" --list-axes "$esc_roster" >/dev/null 2>/dev/null
+out=$("$corm" -X 'A:stoma' -g . "--query@A=don't" -t 10 "$esc_roster" 2>/dev/null)
 expected="2 0.000000 2026-09-14T00:00:00:don't stop thinking"
 assert_eq "escape-apostrophe" "$expected" "$out"
 
-out=$("$qmap" -X 'A:stoma' -g . --query@A='back\slash' -t 10 "$esc_roster" 2>/dev/null)
+out=$("$corm" -X 'A:stoma' -g . --query@A='back\slash' -t 10 "$esc_roster" 2>/dev/null)
 expected="3 0.000000 2026-09-15T00:00:00:back\\slash path"
 assert_eq "escape-backslash" "$expected" "$out"
 
@@ -351,7 +351,7 @@ echo "=== shared broadcast --query: joint accept-and-ignore, stoma answers ==="
 # --since/--until wins) while stoma still matches. Binds only joint+stoma
 # so the broadcast cannot double-feature sepal's own query path.
 js_roster="$td/greps.db@joint,stoma:a:s"
-out=$("$qmap" -X '(joint AND stoma)' -g . --query=beacon --since=0 \
+out=$("$corm" -X '(joint AND stoma)' -g . --query=beacon --since=0 \
 	--until=2026-09-16 -t 10 "$js_roster" 2>"$td/shared.err")
 echo "--- shared stderr ---"; cat "$td/shared.err"
 expected="1 0.000000 2026-09-13T20:00:00:Beacon Harbor lights
@@ -360,11 +360,11 @@ assert_eq "shared-query-regression" "$expected" "$out"
 
 echo "=== classic zero-plugin regression (fresh, no roster) ==="
 (
-	unset QMAP_AXIS_PATH
-	unset QMAP_AXIS_LIBS
-	out=$("$qmap" -g 1 "$td/fresh.db:a:s")
+	unset CORM_AXIS_PATH
+	unset CORM_AXIS_LIBS
+	out=$("$corm" -g 1 "$td/fresh.db:a:s")
 	assert_eq "classic-get-zero-plugins" "-1" "$out"
-	out=$("$qmap" -g . "$td/fresh.db:a:s")
+	out=$("$corm" -g . "$td/fresh.db:a:s")
 	expected="1
 2"
 	assert_eq "classic-all-zero-plugins" "$expected" "$out"

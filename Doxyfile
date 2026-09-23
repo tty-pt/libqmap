@@ -1,2 +1,2 @@
-PROJECT_NAME           = "Qmap"
+PROJECT_NAME           = "Corm"
 @INCLUDE = ../mk/Doxyfile

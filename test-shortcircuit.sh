@@ -1,5 +1,5 @@
 #!/bin/sh -e
-# test-shortcircuit.sh — L1 short-circuit gate for qmap_expr_eval
+# test-shortcircuit.sh — L1 short-circuit gate for corm_expr_eval
 # (AXIS-EFF plan L1): once an E_AND/E_SUB running set is empty (∅∩X=∅,
 # ∅∖X=∅) the remaining branches are skipped WITHOUT decoding their leaves
 # — so e.g. a (text AND sepal) scan pays no sepal embed HTTP call when the
@@ -19,7 +19,7 @@ td=$(mktemp -d)
 trap 'rm -rf "$td"' EXIT
 
 export LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH
-qmap=./bin/qmap
+corm=./bin/corm
 probe=./lib/librec_axis_probe.so
 
 fail=0
@@ -29,13 +29,13 @@ marker_grep() {
 	name=$1
 	want=$2
 	shift 2
-	if "$qmap" "$@" >"$td/out" 2>"$td/err"; then
+	if "$corm" "$@" >"$td/out" 2>"$td/err"; then
 		rc=0
 	else
 		rc=$?
 	fi
 	if [ "$rc" -ne 0 ]; then
-		echo "FAIL - $name (qmap exitted $rc)"
+		echo "FAIL - $name (corm exitted $rc)"
 		fail=1
 		return
 	fi
@@ -54,10 +54,10 @@ marker_grep() {
 }
 
 echo "=== seeding probe.db (refs 1..3) ==="
-"$qmap" -p 1:a -p 2:b -p 3:c "$td/probe.db:a:s" >/dev/null
+"$corm" -p 1:a -p 2:b -p 3:c "$td/probe.db:a:s" >/dev/null
 
-export QMAP_AXIS_LIBS=$PWD/$probe
-export QMAP_AXIS_PATH=./lib
+export CORM_AXIS_LIBS=$PWD/$probe
+export CORM_AXIS_PATH=./lib
 filespec="$td/probe.db@pe:a:s"
 
 echo "=== AND: empty first → boom branch skipped (no decode marker) ==="
@@ -77,7 +77,7 @@ marker_grep "except-control-right-decodes" 1 \
 	-X '(A:pe EXCEPT B:pe)' -g . --query@A=zhit --query@B=boom "$filespec"
 
 echo "=== result-exactness: empty AND boom prints no rows, exit 0 ==="
-out=$("$qmap" -X '(A:pe AND B:pe)' -g . --query@A=empty --query@B=boom "$filespec" 2>/dev/null)
+out=$("$corm" -X '(A:pe AND B:pe)' -g . --query@A=empty --query@B=boom "$filespec" 2>/dev/null)
 if [ -z "$out" ]; then
 	echo "ok - empty-and result empty"
 else
@@ -86,7 +86,7 @@ else
 fi
 
 echo "=== result-exactness: plain zhit AND zhit still rows 1..3 ==="
-out=$("$qmap" -X '(A:pe AND B:pe)' -g . --query@A=zhit --query@B=zhit "$filespec")
+out=$("$corm" -X '(A:pe AND B:pe)' -g . --query@A=zhit --query@B=zhit "$filespec")
 expected="1 a
 2 b
 3 c"
@@ -107,7 +107,7 @@ marker_grep "d15-and-control-boom-first-decodes" 1 \
 	-X '(A:pe AND B:pe)' -g . --query@A=boom --query@B=empty "$filespec"
 
 echo "=== D15: E_REF with empty instance in EXCEPT ==="
-out=$("$qmap" -X '(A:pe EXCEPT A)' -g . --query@A=empty "$filespec" 2>/dev/null)
+out=$("$corm" -X '(A:pe EXCEPT A)' -g . --query@A=empty "$filespec" 2>/dev/null)
 if [ -z "$out" ]; then
 	echo "ok - d15-eref-except-empty"
 else
@@ -115,7 +115,7 @@ else
 	fail=1
 fi
 
-out=$("$qmap" -X '(A:pe EXCEPT B:pe)' -g . --query@A=zhit --query@B=empty "$filespec")
+out=$("$corm" -X '(A:pe EXCEPT B:pe)' -g . --query@A=zhit --query@B=empty "$filespec")
 expected="1 a
 2 b
 3 c"

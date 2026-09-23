@@ -1,5 +1,5 @@
 /* fanout_verify.c — read-side probe for the 2B-4 write-fan-out gate
- * (external/libqmap/test-fanout.sh). dlopen-only (no link deps): the
+ * (external/libcorm/test-fanout.sh). dlopen-only (no link deps): the
  * helper opens an axis ctx through the plugin's own `rec_axis_open` and
  * reads back what the CLI fan-out stored, or reads a primary's raw u32.
  *
@@ -9,7 +9,7 @@
  *
  *   fanout_verify pu32 <file> <ref>
  *     → "<u32-decimal>" of the primary's stored HNDL/U32 payload ("MISS"
- *       when absent), exit 0. Mask = QMAP_MASK-or-4095, matching the CLI.
+ *       when absent), exit 0. Mask = CORM_MASK-or-4095, matching the CLI.
  *
  * Modes print to stdout; diagnostics to stderr. */
 #include <dlfcn.h>
@@ -21,7 +21,7 @@
 static uint32_t
 eff_mask(void)
 {
-	const char *e = getenv("QMAP_MASK");
+	const char *e = getenv("CORM_MASK");
 	if (e && *e) {
 		unsigned long v = strtoul(e, NULL, 10);
 		if (v != 0 && (v & (v + 1)) == 0)
@@ -95,17 +95,17 @@ main(int argc, char *argv[])
 		const void *v;
 		uint32_t u;
 
-		h = dlopen("./lib/libqmap.so", RTLD_NOW);
+		h = dlopen("./lib/libcorm.so", RTLD_NOW);
 		if (!h) {
-			fprintf(stderr, "fanout_verify: dlopen libqmap: %s\n",
+			fprintf(stderr, "fanout_verify: dlopen libcorm: %s\n",
 					dlerror());
 			return 1;
 		}
-		open_sym = must_sym(h, "qmap_open");
-		get_sym = must_sym(h, "qmap_get");
+		open_sym = must_sym(h, "corm_open");
+		get_sym = must_sym(h, "corm_get");
 		memcpy(&open_fn, &open_sym, sizeof(open_fn));
 		memcpy(&get_fn, &get_sym, sizeof(get_fn));
-		/* HNDL keys, U32 values, "hd" dbid, QM_AINDEX=1 — the CLI's
+		/* HNDL keys, U32 values, "hd" dbid, CM_AINDEX=1 — the CLI's
 		 * gen_open shape for :a:u primaries. */
 		hd = open_fn(argv[2], "hd", 1, 3, eff_mask(), 1);
 		ref = (uint32_t) strtoul(argv[3], NULL, 10);

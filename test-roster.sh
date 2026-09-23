@@ -1,13 +1,13 @@
 #!/bin/sh -e
 # test-roster.sh — roster/load tests (2B-1: TDD)
 # Exercises: @roster parse, write-if-absent, stored-roster reload,
-# override-once, unknown name → named error, QMAP_AXIS_LIBS, zero overhead.
+# override-once, unknown name → named error, CORM_AXIS_LIBS, zero overhead.
 
 export LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH
-export QMAP_AXIS_PATH=./lib
-unset QMAP_AXIS_LIBS
+export CORM_AXIS_PATH=./lib
+unset CORM_AXIS_LIBS
 
-qmap=./bin/qmap
+corm=./bin/corm
 fail=0
 
 cleanup() {
@@ -55,7 +55,7 @@ assert_contains() {
 # ── 1: write-if-absent: first @ with axes → sidecar created ──
 echo "=== 1: write-if-absent ==="
 primary="$td/tf.db"
-"$qmap" -p 1:hello "$primary@stub,zed:a:s" >/dev/null 2>&1 || true
+"$corm" -p 1:hello "$primary@stub,zed:a:s" >/dev/null 2>&1 || true
 if [ -s "$primary.roster" ]; then
 	echo "ok - sidecar-created"
 else
@@ -65,13 +65,13 @@ fi
 
 # ── 2: stored-roster reload: reopen without @ → roster loads ──
 echo "=== 2: stored-roster reload ==="
-axes=$("$qmap" --list-axes "$primary:a:s" 2>/dev/null) || true
+axes=$("$corm" --list-axes "$primary:a:s" 2>/dev/null) || true
 assert_contains "stored-reload-lists-stub" "stub" "$axes"
 assert_contains "stored-reload-lists-zed" "zed" "$axes"
 
 # ── 3: override-once: explicit @ replaces stored for this invocation only ──
 echo "=== 3: override-once ==="
-axes=$("$qmap" --list-axes "$primary@zed:a:s" 2>/dev/null) || true
+axes=$("$corm" --list-axes "$primary@zed:a:s" 2>/dev/null) || true
 assert_contains "override-lists-zed" "zed" "$axes"
 if printf '%s' "$axes" | grep -q "stub"; then
 	echo "FAIL - override-not-lists-stub"
@@ -80,14 +80,14 @@ else
 	echo "ok - override-not-lists-stub"
 fi
 # Sidecar unchanged: reopen without @ still reloads stub,zed
-after_override=$("$qmap" --list-axes "$primary:a:s" 2>/dev/null) || true
+after_override=$("$corm" --list-axes "$primary:a:s" 2>/dev/null) || true
 assert_contains "override-unchanged-stub" "stub" "$after_override"
 assert_contains "override-unchanged-zed" "zed" "$after_override"
 
 # ── 4: unknown name → named error ──
 echo "=== 4: unknown name ==="
 exit_code=0
-"$qmap" --list-axes "$primary@wonka:a:s" >/dev/null 2>&1 || exit_code=$?
+"$corm" --list-axes "$primary@wonka:a:s" >/dev/null 2>&1 || exit_code=$?
 assert_ok "unknown-name-nonzero" "1" "$exit_code"
 
 # ── 7: alongside-heuristic — axis store exists but no roster yet ──
@@ -95,25 +95,25 @@ echo "=== 7: alongside-heuristic ==="
 primary_h="$td2/hint.db"
 touch "$td2/hint.db-stub"
 hint_err=""
-"$qmap" --list-axes "$primary_h@stub:a:s" 2>"$td2/hint.err" >/dev/null
+"$corm" --list-axes "$primary_h@stub:a:s" 2>"$td2/hint.err" >/dev/null
 hint_err=$(cat < "$td2/hint.err")
 assert_contains "heuristic-hint" "roster" "$hint_err"
 
-# ── 5: QMAP_AXIS_LIBS alongside by-name ──
-echo "=== 5: QMAP_AXIS_LIBS alongside by-name ==="
-export QMAP_AXIS_LIBS="$PWD/lib/librec_axis_mock.so"
+# ── 5: CORM_AXIS_LIBS alongside by-name ──
+echo "=== 5: CORM_AXIS_LIBS alongside by-name ==="
+export CORM_AXIS_LIBS="$PWD/lib/librec_axis_mock.so"
 primary2="$td2/ql.db"
-"$qmap" -p 1:x "$primary2@mock_b:a:s" >/dev/null 2>&1 || true
-axes=$("$qmap" --list-axes "$primary2:a:s" 2>/dev/null) || true
+"$corm" -p 1:x "$primary2@mock_b:a:s" >/dev/null 2>&1 || true
+axes=$("$corm" --list-axes "$primary2:a:s" 2>/dev/null) || true
 assert_contains "env-libs-resolve" "mock_b" "$axes"
-unset QMAP_AXIS_LIBS
+unset CORM_AXIS_LIBS
 
 # ── 8: per-primary axis isolation (7-AXIS-NAMESPACE-PLAN.md) — two DBs in
 # one directory each own their axis stores; fan-out stays per-primary ──
 echo "=== 8: per-primary axis stores (two DBs in one dir) ==="
-export QMAP_AXIS_LIBS="$PWD/lib/librec_axis_fold.so"
-"$qmap" -p 1:from_a "$td/wa.db@alpha:a:s" >/dev/null 2>&1
-"$qmap" -p 1:from_b "$td/wb.db@alpha:a:s" >/dev/null 2>&1
+export CORM_AXIS_LIBS="$PWD/lib/librec_axis_fold.so"
+"$corm" -p 1:from_a "$td/wa.db@alpha:a:s" >/dev/null 2>&1
+"$corm" -p 1:from_b "$td/wb.db@alpha:a:s" >/dev/null 2>&1
 if [ -e "$td/wa.db-alpha" ] && [ -e "$td/wb.db-alpha" ] \
 		&& [ "$td/wa.db-alpha" != "$td/wb.db-alpha" ]; then
 	echo "ok - per-primary-files-distinct"
@@ -121,17 +121,17 @@ else
 	echo "FAIL - per-primary-files-distinct"
 	fail=1
 fi
-out=$("$qmap" -X alpha -g . "$td/wa.db:a:s" 2>/dev/null)
+out=$("$corm" -X alpha -g . "$td/wa.db:a:s" 2>/dev/null)
 assert_eq "isolation-a" "1 1.000000 from_a" "$out"
-out=$("$qmap" -X alpha -g . "$td/wb.db:a:s" 2>/dev/null)
+out=$("$corm" -X alpha -g . "$td/wb.db:a:s" 2>/dev/null)
 assert_eq "isolation-b" "1 1.000000 from_b" "$out"
-unset QMAP_AXIS_LIBS
+unset CORM_AXIS_LIBS
 
 # ── 6: zero overhead — classic invocations unchanged ──
 echo "=== 6: zero-overhead classic ==="
 classic="$td2/classic.db"
-"$qmap" -p 1:alpha "$classic:u:s" >/dev/null 2>&1
-val=$("$qmap" -r -g 1 "$classic:u:s" 2>/dev/null)
+"$corm" -p 1:alpha "$classic:u:s" >/dev/null 2>&1
+val=$("$corm" -r -g 1 "$classic:u:s" 2>/dev/null)
 assert_eq "classic-put-get" "alpha" "$val"
 
 if [ "$fail" -ne 0 ]; then

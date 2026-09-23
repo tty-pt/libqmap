@@ -8,7 +8,7 @@
 # file (F3); stoma stays derived (rebuilt from the primary at each open,
 # D13); reset is the documented enumerate+forget loop (F5).
 #
-# Requires the real joint+stoma .so's; resolved from $QMAP_AXIS_REAL_LIBS
+# Requires the real joint+stoma .so's; resolved from $CORM_AXIS_REAL_LIBS
 # (colon list, default = the in-site submodule builds under
 # external/lib{joint,stoma}/lib, relative to this script).
 # Fresh local builds only (D4) — nothing installed.
@@ -17,7 +17,7 @@ td=$(mktemp -d)
 trap 'rm -rf "$td"' EXIT
 
 export LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH
-qmap=./bin/qmap
+corm=./bin/corm
 fail=0
 
 assert_eq() {
@@ -48,9 +48,9 @@ assert_ok() {
 
 # --- resolve the real axis lib dirs (fresh local builds, D4) ---
 # Same pattern as test-real.sh: in-site submodule builds relative to this
-# script (explicit $QMAP_AXIS_REAL_LIBS still overrides).
+# script (explicit $CORM_AXIS_REAL_LIBS still overrides).
 script_dir=$(dirname "$0")
-real_libs=${QMAP_AXIS_REAL_LIBS:-$script_dir/../libjoint/lib:$script_dir/../libstoma/lib}
+real_libs=${CORM_AXIS_REAL_LIBS:-$script_dir/../libjoint/lib:$script_dir/../libstoma/lib}
 axis_path=""
 oIFS=$IFS
 IFS=:
@@ -59,7 +59,7 @@ for d in $real_libs; do
 	axis_path="$axis_path${axis_path:+:}$d"
 done
 IFS=$oIFS
-export QMAP_AXIS_PATH=$axis_path
+export CORM_AXIS_PATH=$axis_path
 export LD_LIBRARY_PATH=$axis_path:$LD_LIBRARY_PATH
 
 echo "=== preflight: real joint+stoma .so ==="
@@ -78,7 +78,7 @@ for a in joint stoma; do
 	if [ "$found" = "1" ]; then
 		echo "ok - lib$a.so present"
 	else
-		echo "FAIL - lib$a.so: not found in QMAP_AXIS_PATH ($axis_path)"
+		echo "FAIL - lib$a.so: not found in CORM_AXIS_PATH ($axis_path)"
 		missing=1
 	fi
 done
@@ -88,91 +88,91 @@ if [ "$missing" = "1" ]; then
 fi
 
 echo "=== control: joint-only roster seed + forget persists ==="
-"$qmap" -p 1:"2026-09-13:Beacon Harbor lights" \
+"$corm" -p 1:"2026-09-13:Beacon Harbor lights" \
         -p 2:"2026-09-14:alpha omega" "$td/j.db@joint:a:s" >/dev/null 2>&1
-out=$("$qmap" -g . "$td/j.db:a:s" 2>/dev/null)
+out=$("$corm" -g . "$td/j.db:a:s" 2>/dev/null)
 assert_eq "joint-seed-refs" "1
 2" "$out"
-"$qmap" -d 2 "$td/j.db@joint:a:s" >/dev/null 2>&1
+"$corm" -d 2 "$td/j.db@joint:a:s" >/dev/null 2>&1
 assert_ok "joint-forget-exit" "0" "$?"
-out=$("$qmap" -g . "$td/j.db:a:s" 2>/dev/null)
+out=$("$corm" -g . "$td/j.db:a:s" 2>/dev/null)
 assert_eq "joint-forget-persisted" "1" "$out"
 
 echo "=== F4a: roster pre-exists, then seed → refs must persist ==="
-"$qmap" --list-axes "$td/m.db@joint,stoma:a:s" >/dev/null 2>&1
-"$qmap" -p 1:"2026-09-13:Beacon Harbor lights" \
+"$corm" --list-axes "$td/m.db@joint,stoma:a:s" >/dev/null 2>&1
+"$corm" -p 1:"2026-09-13:Beacon Harbor lights" \
         -p 2:"2026-09-14:alpha omega" \
         -p 3:"2026-09-15:beacon beacon harbor" \
         "$td/m.db@joint,stoma:a:s" >/dev/null 2>&1
-out=$("$qmap" -g . "$td/m.db:a:s" 2>/dev/null)
+out=$("$corm" -g . "$td/m.db:a:s" 2>/dev/null)
 assert_eq "seed-persisted" "1
 2
 3" "$out"
 
 echo "=== composed search (joint window AND stoma) ==="
 expr='(joint AND stoma)'
-out=$("$qmap" -X "$expr" -g . --since=2026-09-14 --until=2026-09-16 \
+out=$("$corm" -X "$expr" -g . --since=2026-09-14 --until=2026-09-16 \
 	--query=beacon --field=text --matched=1 "$td/m.db:a:s" -t 10 2>/dev/null)
 assert_eq "composed-and" "1 0.166667 2026-09-13:Beacon Harbor lights
 3 0.166667 2026-09-15:beacon beacon harbor" "$out"
 
 echo "=== composed search without -g .: implicit query ==="
-out=$("$qmap" -X "$expr" --since=2026-09-14 --until=2026-09-16 \
+out=$("$corm" -X "$expr" --since=2026-09-14 --until=2026-09-16 \
 	--query=beacon --field=text --matched=1 "$td/m.db:a:s" -t 10 2>/dev/null)
 assert_eq "composed-and-implicit" "1 0.166667 2026-09-13:Beacon Harbor lights
 3 0.166667 2026-09-15:beacon beacon harbor" "$out"
 
 echo "=== pure-filter joint-only search (no score columns) ==="
-out=$("$qmap" -X 'joint' -g . --since=0 --until=2026-09-14 "$td/m.db:a:s" 2>/dev/null)
+out=$("$corm" -X 'joint' -g . --since=0 --until=2026-09-14 "$td/m.db:a:s" 2>/dev/null)
 assert_eq "joint-before" "1 2026-09-13:Beacon Harbor lights" "$out"
 
 echo "=== F4b: forget with joint+stoma roster → gone from all three ==="
-"$qmap" -d 3 "$td/m.db@joint,stoma:a:s" >/dev/null 2>&1
+"$corm" -d 3 "$td/m.db@joint,stoma:a:s" >/dev/null 2>&1
 assert_ok "forget-exit" "0" "$?"
-"$qmap" -d 3 "$td/m.db@joint,stoma:a:s" >/dev/null 2>&1
+"$corm" -d 3 "$td/m.db@joint,stoma:a:s" >/dev/null 2>&1
 assert_ok "forget-idempotent" "0" "$?"
-out=$("$qmap" -g . "$td/m.db:a:s" 2>/dev/null)
+out=$("$corm" -g . "$td/m.db:a:s" 2>/dev/null)
 assert_eq "forget-primary" "1
 2" "$out"
-out=$("$qmap" -X 'stoma' -g . --query=beacon --field=text --matched=1 "$td/m.db:a:s" 2>/dev/null)
+out=$("$corm" -X 'stoma' -g . --query=beacon --field=text --matched=1 "$td/m.db:a:s" 2>/dev/null)
 assert_eq "forget-stoma" "1 0.166667 2026-09-13:Beacon Harbor lights" "$out"
-out=$("$qmap" -X 'joint' -g . --since=2026-09-15 --until=2026-09-16 "$td/m.db:a:s" 2>/dev/null)
+out=$("$corm" -X 'joint' -g . --since=2026-09-15 --until=2026-09-16 "$td/m.db:a:s" 2>/dev/null)
 # Presence semantics (F2): refs 1/2 own open [date,inf) intervals that still
 # overlap the window; only the forgotten ref 3 must be gone.
 assert_eq "forget-joint" "1 2026-09-13:Beacon Harbor lights
 2 2026-09-14:alpha omega" "$out"
 
 echo "=== reset: documented enumerate+forget loop ==="
-"$qmap" -p 1:"2026-09-13:Beacon Harbor lights" \
+"$corm" -p 1:"2026-09-13:Beacon Harbor lights" \
         -p 2:"2026-09-14:alpha omega" \
         -p 3:"2026-09-15:beacon beacon harbor" \
         "$td/r.db@joint,stoma:a:s" >/dev/null 2>&1
-for ref in $("$qmap" -g . "$td/r.db:a:s" 2>/dev/null | grep -E '^[0-9]+$'); do
-	"$qmap" -d "$ref" "$td/r.db@joint,stoma:a:s" >/dev/null 2>&1
+for ref in $("$corm" -g . "$td/r.db:a:s" 2>/dev/null | grep -E '^[0-9]+$'); do
+	"$corm" -d "$ref" "$td/r.db@joint,stoma:a:s" >/dev/null 2>&1
 done
 assert_ok "reset-exit" "0" "$?"
-out=$("$qmap" -g . "$td/r.db:a:s" 2>/dev/null)
+out=$("$corm" -g . "$td/r.db:a:s" 2>/dev/null)
 assert_eq "reset-empty" "-1" "$out"
-out=$("$qmap" -X 'stoma' -g . --query=beacon --field=text --matched=1 "$td/r.db:a:s" 2>/dev/null)
+out=$("$corm" -X 'stoma' -g . --query=beacon --field=text --matched=1 "$td/r.db:a:s" 2>/dev/null)
 assert_eq "reset-stoma-empty" "" "$out"
-out=$("$qmap" -X 'joint' -g . --since=0 --until=2026-10-01 "$td/r.db:a:s" 2>/dev/null)
+out=$("$corm" -X 'joint' -g . --since=0 --until=2026-10-01 "$td/r.db:a:s" 2>/dev/null)
 assert_eq "reset-joint-empty" "" "$out"
 echo "=== reset is idempotent ==="
-for ref in $("$qmap" -g . "$td/r.db:a:s" 2>/dev/null | grep -E '^[0-9]+$'); do
-	"$qmap" -d "$ref" "$td/r.db@joint,stoma:a:s" >/dev/null 2>&1
+for ref in $("$corm" -g . "$td/r.db:a:s" 2>/dev/null | grep -E '^[0-9]+$'); do
+	"$corm" -d "$ref" "$td/r.db@joint,stoma:a:s" >/dev/null 2>&1
 done
 assert_ok "reset-again" "0" "$?"
-out=$("$qmap" -g . "$td/r.db:a:s" 2>/dev/null)
+out=$("$corm" -g . "$td/r.db:a:s" 2>/dev/null)
 assert_eq "reset-again-empty" "-1" "$out"
 
 echo "=== classic zero-plugin regression (no roster anywhere) ==="
-"$qmap" -p 5:q "$td/fresh.db:a:s" >/dev/null 2>&1
+"$corm" -p 5:q "$td/fresh.db:a:s" >/dev/null 2>&1
 (
-	unset QMAP_AXIS_PATH
-	unset QMAP_AXIS_LIBS
-	out=$("$qmap" -g . "$td/fresh.db:a:s" 2>/dev/null)
+	unset CORM_AXIS_PATH
+	unset CORM_AXIS_LIBS
+	out=$("$corm" -g . "$td/fresh.db:a:s" 2>/dev/null)
 	assert_eq "classic-all" "5" "$out"
-	out=$("$qmap" -g . "$td/never.db:a:s" 2>/dev/null)
+	out=$("$corm" -g . "$td/never.db:a:s" 2>/dev/null)
 	assert_eq "classic-empty-sentinel" "-1" "$out"
 )
 

@@ -1,8 +1,8 @@
 /* rec.c — recall kernel (candidate sets + generic ranking loop).
- * Part of libqmap. See rec.h for the public contract. */
+ * Part of libcorm. See rec.h for the public contract. */
 
 #include "./../include/ttypt/rec.h"
-#include "./../include/ttypt/qmap.h"
+#include "./../include/ttypt/corm.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -93,22 +93,22 @@ rec_set_seal(rec_set_t *s)
 }
 
 int
-rec_set_fill_qmap_iter(rec_set_t *s, uint32_t hd)
+rec_set_fill_corm_iter(rec_set_t *s, uint32_t hd)
 {
-	uint32_t kt = qmap_get_ktype(hd);
-	size_t kl = qmap_type_len(kt);
+	uint32_t kt = corm_get_ktype(hd);
+	size_t kl = corm_type_len(kt);
 	if (kl == 0 || kl > sizeof(rec_ref_t))
 		return -1;
 
-	uint32_t cur = qmap_iter(hd, NULL, 0);
+	uint32_t cur = corm_iter(hd, NULL, 0);
 	const void *key, *value;
 	rec_ref_t r;
-	while (qmap_next(&key, &value, cur)) {
+	while (corm_next(&key, &value, cur)) {
 		memset(&r, 0, sizeof(r));
 		memcpy(&r, key, kl);
 		rec_set_push(s, r);
 	}
-	qmap_fin(cur);
+	corm_fin(cur);
 	return 0;
 }
 

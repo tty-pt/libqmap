@@ -1,5 +1,5 @@
 /* librec_axis_probe.c — single-axis probe plugin for the L1 short-circuit
- * efficiency gate (test-shortcircuit.sh): proves qmap_expr_eval skips the
+ * efficiency gate (test-shortcircuit.sh): proves corm_expr_eval skips the
  * decode/fill of AND/EXCEPT branches once the running set is empty
  * (AXIS-EFF plan L1).
  *
@@ -19,7 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* D14 axis-contributed CLI surface (test-only, probe plugin): the qmap
+/* D14 axis-contributed CLI surface (test-only, probe plugin): the corm
  * CLI broadcasts inline `--query=…` to every bound axis declaring the
  * name; probe adopts it. After Slice 4, bare leaves carry no value, so
  * probe_decode must fall back to the CLI value when s == NULL. */

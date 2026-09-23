@@ -1,8 +1,8 @@
 /* rec_axis.c — pluggable axis registry + multi-axis query engine.
- * Part of libqmap. See rec.h for the public contract.
+ * Part of libcorm. See rec.h for the public contract.
  *
  * The registry is a fixed table of opaque axes (filled by dlopen'd plugin
- * constructors or by direct calls); libqmap itself knows nothing about any
+ * constructors or by direct calls); libcorm itself knows nothing about any
  * concrete axis. rec_query_run fills each axis, folds the sealed sets into
  * a running set with the kernel merge-joins (AND → intersect, OR → union,
  * NOT → subtract), then ranks via rec_rank. */

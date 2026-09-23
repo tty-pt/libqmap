@@ -3,9 +3,9 @@
  * @brief Recall kernel: uniform candidate sets + a generic ranking loop.
  *
  * Pure C, no domain math. Candidate sets are sorted, deduplicated lists of
- * 32-bit refs (merge-join, no hashing). A ref IS a qmap record reference
- * (e.g. the id returned by qmap_put() under QM_AINDEX) — the same
- * primary-key space every qmap-backed store shares, never an axis's own
+ * 32-bit refs (merge-join, no hashing). A ref IS a corm record reference
+ * (e.g. the id returned by corm_put() under CM_AINDEX) — the same
+ * primary-key space every corm-backed store shares, never an axis's own
  * internal key. An axis may index by whatever it needs internally (e.g.
  * libislet's 64-bit morton keys); those internal keys are not refs and
  * never leave the axis. The ranking loop is a bounded, streaming min-heap:
@@ -13,7 +13,7 @@
  * materialized only when a second axis needs to join. Weighted composition
  * across axes lives in the consumer's score function.
  *
- * Kernel is optional and additive: raw qmap / domain entry points in the
+ * Kernel is optional and additive: raw corm / domain entry points in the
  * axis libraries are untouched. Ref mapping is the consumer's job — the
  * kernel never interprets a ref.
  *
@@ -26,7 +26,7 @@
  * declare themselves, since intersecting with an approximate set bounds
  * final recall by it. Full design: docs/RECALL-KERNEL.md.
  *
- * @see qmap.h
+ * @see corm.h
  */
 #ifndef TTYPT_REC_H
 #define TTYPT_REC_H
@@ -56,11 +56,11 @@ void rec_set_push(rec_set_t *s, rec_ref_t r);
 /** Sort + dedup in place. Joins require sealed inputs. */
 void rec_set_seal(rec_set_t *s);
 
-/** Drain a qmap handle's iteration into the set (keys must be fixed-length,
+/** Drain a corm handle's iteration into the set (keys must be fixed-length,
  *  <= 4 bytes; refs are read from the key bytes). Excludes nothing; call
  *  rec_set_seal afterwards. Returns 0 on success, -1 if keys are variable
  *  length or wider than a ref. */
-int rec_set_fill_qmap_iter(rec_set_t *s, uint32_t hd);
+int rec_set_fill_corm_iter(rec_set_t *s, uint32_t hd);
 
 /** dst := a ∩ b. a and b must be sealed; dst content is discarded. */
 int rec_set_intersect(rec_set_t *dst, const rec_set_t *a, const rec_set_t *b);
@@ -227,7 +227,7 @@ int rec_query_run(const rec_query_t *q, rec_ref_t *refs, float *scores);
 
 /** @defgroup rec_axis_cli Axis CLI contract (D14/D15B)
  *  The kernel owns the axis-CLI ABI and the decode-spec grammar exactly
- *  once (implementation: libqmap src/rec_cli.c). An axis implements only
+ *  once (implementation: libcorm src/rec_cli.c). An axis implements only
  *  its option table (rec_axis_cli_options) and its per-field mapping in
  *  rec_axis_config_arg / decode. Layouts are visible to every TU via this
  *  header — never re-declared locally.

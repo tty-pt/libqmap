@@ -5,11 +5,11 @@
  *
  * Proves the target architecture end-to-end with REAL (non-mock) stores:
  *
- *   - One PRIMARY value map (its own qmap file, here in-memory) holds the
- *     actual content (a string) and is the id authority: qmap_put(hd,
- *     NULL, value) with QM_AINDEX hands back the id.
+ *   - One PRIMARY value map (its own corm file, here in-memory) holds the
+ *     actual content (a string) and is the id authority: corm_put(hd,
+ *     NULL, value) with CM_AINDEX hands back the id.
  *   - libjoint keeps its OWN file-backed store (here in-memory too --
- *     "having their own qmaps if need be") and is populated using that
+ *     "having their own corms if need be") and is populated using that
  *     SAME id: joint_start(jd, ts, id) / joint_stop(jd, ts, id).
  *   - libsepal keeps its OWN store and is populated using the SAME id:
  *     sepal_put(vs, (rec_ref_t)id, vec, dim).
@@ -37,7 +37,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <ttypt/qmap.h>
+#include <ttypt/corm.h>
 #include <ttypt/rec.h>
 #include <ttypt/joint.h>
 #include <ttypt/sepal.h>
@@ -90,8 +90,8 @@ int main(void)
 	size_t nhit;
 	float q[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
 
-	/* --- three independent stores, own qmap-backed state each --- */
-	mem_hd = qmap_open(NULL, NULL, QM_HNDL, QM_STR, 0xFF, QM_AINDEX);
+	/* --- three independent stores, own corm-backed state each --- */
+	mem_hd = corm_open(NULL, NULL, CM_HNDL, CM_STR, 0xFF, CM_AINDEX);
 	CHECK(mem_hd != 0, "primary map opened");
 
 	jd = joint_init(NULL);
@@ -104,7 +104,7 @@ int main(void)
 
 	/* --- writes: explicit multi-call sequences, same id everywhere --- */
 	for (i = 0; i < 3; i++) {
-		ids[i] = qmap_put(mem_hd, NULL, seeds[i].text);
+		ids[i] = corm_put(mem_hd, NULL, seeds[i].text);
 		joint_start(jd, seeds[i].ts, ids[i]);
 		joint_stop(jd, seeds[i].ts + 1, ids[i]);
 		sepal_put(vs, (rec_ref_t)ids[i], seeds[i].vec, 4);
@@ -114,7 +114,7 @@ int main(void)
 
 	/* Primary map round-trips the original strings. */
 	for (i = 0; i < 3; i++) {
-		const char *got = qmap_get(mem_hd, &ids[i]);
+		const char *got = corm_get(mem_hd, &ids[i]);
 		CHECK(got && !strcmp(got, seeds[i].text),
 		      "primary map returns original string");
 	}
@@ -152,7 +152,7 @@ int main(void)
 	if (rec_set_count(inter) == 1) {
 		rec_ref_t winner = rec_set_at(inter)[0];
 		uint32_t winner_key = (uint32_t)winner;
-		const char *text = qmap_get(mem_hd, &winner_key);
+		const char *text = corm_get(mem_hd, &winner_key);
 
 		CHECK(text && !strcmp(text, "gamma memory about water"),
 		      "winning id resolves to the original string via the "
@@ -167,7 +167,7 @@ int main(void)
 	rec_set_free(inter);
 	sepal_close(vs);
 	joint_close(jd);
-	qmap_close(mem_hd);
+	corm_close(mem_hd);
 
 	printf("Results: %d/%d passed", total - failures, total);
 	if (failures)

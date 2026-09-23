@@ -1,8 +1,8 @@
-CFLAGS-libqmap-o := -fPIC
+CFLAGS-libcorm-o := -fPIC
 CFLAGS-idm-o := -fPIC
 CFLAGS-rec-o := -fPIC
 CFLAGS-rec_axis-o := -fPIC
-CFLAGS-qmap-o :=
+CFLAGS-corm-o :=
 CFLAGS-test-o :=
 CFLAGS-test_extended-o :=
 CFLAGS-test_multivalue-o :=

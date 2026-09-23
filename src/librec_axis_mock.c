@@ -11,14 +11,14 @@
  * LIB-obj-y aggregation has a latent bug with 3+ concurrent "lib*" targets
  * in one Makefile ($(LIB:%=%-obj-y) expands to a multi-word string, and
  * GNU Make's $($(X)) double-dereference only works for a single-word X,
- * so libqmap's own extra objects — idm.o/rec.o/rec_axis.o — silently drop
+ * so libcorm's own extra objects — idm.o/rec.o/rec_axis.o — silently drop
  * out of the link line). Rather than touch that shared, cross-repo build
  * system, this test stays a single "lib" target and gets its two
  * independent axes from one constructor instead.)
  *
  * Built as a loadable .so (Makefile's `all` list, name starts with "lib" so
- * the shared LIB build rule picks it up) but NEVER linked into qmap/libqmap
- * themselves — dlopen'd only by axis consumers via QMAP_AXIS_LIBS. Mirrors
+ * the shared LIB build rule picks it up) but NEVER linked into corm/libcorm
+ * themselves — dlopen'd only by axis consumers via CORM_AXIS_LIBS. Mirrors
  * the shape a real axis library's registration constructor would have
  * (see the recall-query plan doc §3's four sibling axis libraries) except
  * for the two-axes-in-one-constructor deviation explained above, which is
@@ -63,7 +63,7 @@ store_append(mock_store_t *st, rec_ref_t ref, const char *value)
 		st->entries = grown;
 		st->cap = ncap;
 	}
-	/* Same-ref put replaces in place (matches sepal / qmap semantics). */
+	/* Same-ref put replaces in place (matches sepal / corm semantics). */
 	for (i = 0; i < st->n; i++)
 		if (st->entries[i].ref == ref) {
 			char *copy = strdup(value);
@@ -106,7 +106,7 @@ store_find(mock_store_t *st, rec_ref_t ref)
 
 /* ── rec_axis_store / rec_axis_unstore / rec_axis_readback conventional
  *    exports (2A-mock / PHASE-2-CLI.md §2A contract; optional, CLI-specific,
- *    dlsym'd like rec_axis_open — never declared or called by libqmap). The
+ *    dlsym'd like rec_axis_open — never declared or called by libcorm). The
  *    mock stores the whole `value` string verbatim per (axis, ref). Read-back
  *    is rec_axis_readback: rec_axis_get(int) is the kernel registry lookup. */
 

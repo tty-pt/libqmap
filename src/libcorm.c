@@ -1,10 +1,10 @@
-/* libqmap.c
+/* libcorm.c
  * Licence: BSD-2-Clause
  *
  * I'm adding some comments to make it easier to understand,
  * but whatever's user API is documented in the header file.
  */
-#include "./../include/ttypt/qmap.h"
+#include "./../include/ttypt/corm.h"
 #include "./../include/ttypt/idm.h"
 #include <assert.h>
 #include <stdio.h>
@@ -20,62 +20,62 @@
 
 /* MACROS, STRUCTS, ENUMS AND GLOBALS {{{ */
 
-#define QM_SEED 13
-#define QM_DEFAULT_MASK 0xFF
-#define QM_MAX 1024
-#define QMAP_POOL_STEP 16
-#define QMAP_POOL_MAX 4096
-#define QMAP_POOL_BINS (QMAP_POOL_MAX / QMAP_POOL_STEP)
+#define CM_SEED 13
+#define CM_DEFAULT_MASK 0xFF
+#define CM_MAX 1024
+#define CORM_POOL_STEP 16
+#define CORM_POOL_MAX 4096
+#define CORM_POOL_BINS (CORM_POOL_MAX / CORM_POOL_STEP)
 
 #define TYPES_MASK 0xFF
 
 #define DEBUG_LVL 1
 
-/* Internal iterator flag: cursor walks a QM_MULTIVALUE duplicate chain
- * (via qmap->mv_next[]) instead of hash/position space. */
-#define QM_MVCHAIN 0x80000000u
+/* Internal iterator flag: cursor walks a CM_MULTIVALUE duplicate chain
+ * (via corm->mv_next[]) instead of hash/position space. */
+#define CM_MVCHAIN 0x80000000u
 
 #define DEBUG(lvl, ...) \
   if (DEBUG_LVL > lvl) WARN(__VA_ARGS__)
 
-#define VAL_ADDR(qmap, n) \
-  (void **)(((char *) qmap->table) \
+#define VAL_ADDR(corm, n) \
+  (void **)(((char *) corm->table) \
       + sizeof(void *) * n)
 
-typedef struct qmap_blk {
-  struct qmap_blk *next;
+typedef struct corm_blk {
+  struct corm_blk *next;
   size_t size;
-} qmap_blk_t;
+} corm_blk_t;
 
   static inline size_t
-qmap_payload_off(size_t key_len)
+corm_payload_off(size_t key_len)
 {
   size_t align = sizeof(void *) - 1;
 
   return (key_len + align) & ~align;
 }
 
-static_assert(QM_MISS == UINT32_MAX, "assume U32INT_MAX");
+static_assert(CM_MISS == UINT32_MAX, "assume U32INT_MAX");
 
-enum QM_MBR {
-  QM_KEY,
-  QM_VALUE,
+enum CM_MBR {
+  CM_KEY,
+  CM_VALUE,
 };
 
 enum qm_internal_flags {
-  QM_SDIRTY = 1, // sorted list needs rebuild
-  QM_IS_MIRROR = 2,  // this is a QM_MIRROR map (shares positions with primary)
+  CM_SDIRTY = 1, // sorted list needs rebuild
+  CM_IS_MIRROR = 2,  // this is a CM_MIRROR map (shares positions with primary)
 };
 
 typedef struct {
   uint32_t types[2], n, m, mask, flags,
            phd, sorted_n, iflags, dbid;
   uint32_t record_id;  /* 0 = not record-aware */
-  uint32_t vstr_hd;    /* handle to QM_STR/QM_STR map for QM_VSTR fields, 0=lazy */
+  uint32_t vstr_hd;    /* handle to CM_STR/CM_STR map for CM_VSTR fields, 0=lazy */
   const char *file;
   uint32_t *inv_hds;   /* per-field inverse map handles, calloc'd at open */
-  char get_buf[64];    /* reusable formatting buffer for QM_U32/QM_REFERENCE */
-} qmap_head_t;
+  char get_buf[64];    /* reusable formatting buffer for CM_U32/CM_REFERENCE */
+} corm_head_t;
 
 typedef struct {
   idm_t idm;
@@ -83,34 +83,34 @@ typedef struct {
   uint32_t *map;  	// id -> n
   const void **omap;	// n -> key
   uint32_t *key_hashes;	// n -> cached key hash
-  uint32_t *mv_next;	// n -> next duplicate position in QM_MULTIVALUE chain
+  uint32_t *mv_next;	// n -> next duplicate position in CM_MULTIVALUE chain
   void **table;		// n -> values
   size_t *key_sizes;	// n -> size of allocated key
   size_t *val_sizes;	// n -> size of allocated value
-  qmap_blk_t *payload_bins[QMAP_POOL_BINS];
+  corm_blk_t *payload_bins[CORM_POOL_BINS];
 
   ids_t linked;
-  qmap_assoc_t *assoc;
+  corm_assoc_t *assoc;
   void *assoc_userdata;
-  qmap_assoc_multi_t *m_assoc;
+  corm_assoc_multi_t *m_assoc;
   void *m_assoc_userdata;
 
   uint32_t *sorted_idx;
-} qmap_t;
+} corm_t;
 
   static inline void *
-qmap_payload_alloc(qmap_t *qmap, size_t key_len, size_t val_len)
+corm_payload_alloc(corm_t *corm, size_t key_len, size_t val_len)
 {
-  size_t raw = qmap_payload_off(key_len) + val_len;
-  size_t size = (raw + (QMAP_POOL_STEP - 1)) & ~(QMAP_POOL_STEP - 1);
-  qmap_blk_t *blk;
+  size_t raw = corm_payload_off(key_len) + val_len;
+  size_t size = (raw + (CORM_POOL_STEP - 1)) & ~(CORM_POOL_STEP - 1);
+  corm_blk_t *blk;
   uint32_t bin;
 
-  if (size <= QMAP_POOL_MAX) {
-    bin = (uint32_t) (size / QMAP_POOL_STEP - 1);
-    blk = qmap->payload_bins[bin];
+  if (size <= CORM_POOL_MAX) {
+    bin = (uint32_t) (size / CORM_POOL_STEP - 1);
+    blk = corm->payload_bins[bin];
     if (blk) {
-      qmap->payload_bins[bin] = blk->next;
+      corm->payload_bins[bin] = blk->next;
       blk->next = NULL;
       blk->size = size;
       return (void *) (blk + 1);
@@ -127,41 +127,41 @@ qmap_payload_alloc(qmap_t *qmap, size_t key_len, size_t val_len)
 }
 
   static inline void
-qmap_payload_free(qmap_t *qmap, void *key)
+corm_payload_free(corm_t *corm, void *key)
 {
-  qmap_blk_t *blk;
+  corm_blk_t *blk;
   uint32_t bin;
 
   if (!key)
     return;
 
-  blk = ((qmap_blk_t *) key) - 1;
-  if (blk->size <= QMAP_POOL_MAX) {
-    bin = (uint32_t) (blk->size / QMAP_POOL_STEP - 1);
-    blk->next = qmap->payload_bins[bin];
-    qmap->payload_bins[bin] = blk;
+  blk = ((corm_blk_t *) key) - 1;
+  if (blk->size <= CORM_POOL_MAX) {
+    bin = (uint32_t) (blk->size / CORM_POOL_STEP - 1);
+    blk->next = corm->payload_bins[bin];
+    corm->payload_bins[bin] = blk;
   } else
     free(blk);
 }
 
   static inline void
-qmap_payload_flush(qmap_t *qmap)
+corm_payload_flush(corm_t *corm)
 {
-  for (size_t i = 0; i < QMAP_POOL_BINS; i++) {
-    qmap_blk_t *blk = qmap->payload_bins[i];
+  for (size_t i = 0; i < CORM_POOL_BINS; i++) {
+    corm_blk_t *blk = corm->payload_bins[i];
     while (blk) {
-      qmap_blk_t *next = blk->next;
+      corm_blk_t *next = blk->next;
       free(blk);
       blk = next;
     }
-    qmap->payload_bins[i] = NULL;
+    corm->payload_bins[i] = NULL;
   }
 }
 
   static inline size_t
-qmap_payload_cap(const void *key)
+corm_payload_cap(const void *key)
 {
-  const qmap_blk_t *blk = ((const qmap_blk_t *) key) - 1;
+  const corm_blk_t *blk = ((const corm_blk_t *) key) - 1;
   return blk->size;
 }
 
@@ -169,42 +169,42 @@ typedef struct {
   uint32_t hd, pos, sub_cur, ipos, end_pos, flags;
   size_t key_len;
   const void * key;
-} qmap_cur_t;
+} corm_cur_t;
 
-typedef uint32_t qmap_hash_t(
+typedef uint32_t corm_hash_t(
     const void * const key,
     size_t len);
 
 typedef struct {
   size_t len;
-  qmap_measure_t *measure;
-  qmap_hash_t *hash;
-  qmap_cmp_t *cmp;
-} qmap_type_t;
+  corm_measure_t *measure;
+  corm_hash_t *hash;
+  corm_cmp_t *cmp;
+} corm_type_t;
 
 typedef struct {
   ids_t ids;
   int fd;
   char *mmaped;
   size_t size;
-} qmap_file_t;
+} corm_file_t;
 
-static qmap_head_t qmap_heads[QM_MAX];
-static qmap_t qmaps[QM_MAX];
-static qmap_cur_t qmap_cursors[QM_MAX];
+static corm_head_t corm_heads[CM_MAX];
+static corm_t corms[CM_MAX];
+static corm_cur_t corm_cursors[CM_MAX];
 static idm_t idm, cursor_idm;
 static uint32_t _qsort_cmp_hd;
 
-static qmap_type_t qmap_types[TYPES_MASK + 1];
+static corm_type_t corm_types[TYPES_MASK + 1];
 static uint32_t types_n = 0;
 
-static uint32_t qmap_files_hd, qmap_dbs_hd;
-static int mdbs[QM_MAX];
+static uint32_t corm_files_hd, corm_dbs_hd;
+static int mdbs[CM_MAX];
 
 /* ── Record-aware map support ─────────────────────────────────────────── */
 
-#define QMAP_MAX_RECORDS 64
-#define QMAP_MAX_RECORD_FIELDS 32
+#define CORM_MAX_RECORDS 64
+#define CORM_MAX_RECORD_FIELDS 32
 
 typedef struct {
   char name[64];
@@ -218,20 +218,20 @@ typedef struct {
     uint32_t target_record;
     uint32_t target_hd;
     char inverse[64];
-  } fields[QMAP_MAX_RECORD_FIELDS];
+  } fields[CORM_MAX_RECORD_FIELDS];
   size_t field_count;
-} qmap_record_t;
+} corm_record_t;
 
-static qmap_record_t qmap_records[QMAP_MAX_RECORDS];
-static uint32_t qmap_records_n = 0;
+static corm_record_t corm_records[CORM_MAX_RECORDS];
+static uint32_t corm_records_n = 0;
 
 /* ── Record field lookup helper ───────────────────────────────────────── */
 
-static int qmap_record_find_field(uint32_t record_id, const char *field_name)
+static int corm_record_find_field(uint32_t record_id, const char *field_name)
 {
-  if (!record_id || record_id > qmap_records_n) return -1;
-  for (size_t i = 0; i < qmap_records[record_id].field_count; i++) {
-    if (strcmp(qmap_records[record_id].fields[i].name, field_name) == 0)
+  if (!record_id || record_id > corm_records_n) return -1;
+  for (size_t i = 0; i < corm_records[record_id].field_count; i++) {
+    if (strcmp(corm_records[record_id].fields[i].name, field_name) == 0)
       return (int)i;
   }
   return -1;
@@ -242,7 +242,7 @@ static int qmap_record_find_field(uint32_t record_id, const char *field_name)
 /* BUILT-INS {{{ */
 
   static uint32_t
-qmap_nohash(const void * const key, size_t len UNUSED)
+corm_nohash(const void * const key, size_t len UNUSED)
 {
   uint32_t u;
   memcpy(&u, key, sizeof(u));
@@ -250,12 +250,12 @@ qmap_nohash(const void * const key, size_t len UNUSED)
 }
 
 static uint32_t
-qmap_chash(const void *data, size_t len) {
-  return XXH32(data, len, QM_SEED);
+corm_chash(const void *data, size_t len) {
+  return XXH32(data, len, CM_SEED);
 }
 
   static int
-qmap_ccmp(const void * const a,
+corm_ccmp(const void * const a,
     const void * const b,
     size_t len)
 {
@@ -263,7 +263,7 @@ qmap_ccmp(const void * const a,
 }
 
   static int
-qmap_scmp(const void * const a,
+corm_scmp(const void * const a,
     const void * const b,
     size_t len UNUSED)
 {
@@ -271,7 +271,7 @@ qmap_scmp(const void * const a,
 }
 
   static int
-qmap_ucmp(const void * const a,
+corm_ucmp(const void * const a,
     const void * const b,
     size_t len UNUSED)
 {
@@ -283,7 +283,7 @@ qmap_ucmp(const void * const a,
 }
 
   static void
-qmap_rassoc(const void **skey,
+corm_rassoc(const void **skey,
     const void * const pkey UNUSED,
     const void * const value,
     void *userdata UNUSED)
@@ -298,56 +298,56 @@ qmap_rassoc(const void **skey,
 
 /* Easily obtain the pointer to the key */
   static inline void *
-qmap_key(uint32_t hd, uint32_t n)
+corm_key(uint32_t hd, uint32_t n)
 {
-  qmap_t *qmap = &qmaps[hd];
-  return (void *) qmap->omap[n];
+  corm_t *corm = &corms[hd];
+  return (void *) corm->omap[n];
 }
 
 /* Easily obtain the pointer to the value */
 static inline void *
-qmap_val(uint32_t hd, uint32_t n) {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *pqmap;
+corm_val(uint32_t hd, uint32_t n) {
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *pcorm;
 
-  if (head->flags & QM_PGET)
-    return qmap_key(head->phd, n);
+  if (head->flags & CM_PGET)
+    return corm_key(head->phd, n);
 
-  pqmap = &qmaps[head->phd];
-  return * VAL_ADDR(pqmap, n);
+  pcorm = &corms[head->phd];
+  return * VAL_ADDR(pcorm, n);
 }
 
 /* In some cases we want to calculate the id based on the
- * qmap's hash function and the key, and the mask. Other
+ * corm's hash function and the key, and the mask. Other
  * times it's not useful to do that. This is for when it is.
  *
  * When requested, also returns the computed key length/hash so
  * callers that need to store the metadata do not recompute it.
  */
 static inline uint32_t
-qmap_id_hash(uint32_t hd, const void * const key,
+corm_id_hash(uint32_t hd, const void * const key,
     size_t key_len, uint32_t key_hash);
 
   static inline uint32_t
-qmap_id_ex(uint32_t hd, const void * const key,
+corm_id_ex(uint32_t hd, const void * const key,
     size_t *key_len_out, uint32_t *key_hash_out)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  uint32_t ktype = head->types[QM_KEY];
-  qmap_type_t *type = &qmap_types[ktype];
+  corm_head_t *head = &corm_heads[hd];
+  uint32_t ktype = head->types[CM_KEY];
+  corm_type_t *type = &corm_types[ktype];
 
   size_t key_len;
   uint32_t key_hash;
 
-  if (ktype == QM_STR) {
+  if (ktype == CM_STR) {
     key_len = strlen((const char *)key) + 1;
-    key_hash = XXH32(key, key_len, QM_SEED);
-  } else if (ktype == QM_U32 || ktype == QM_HNDL) {
+    key_hash = XXH32(key, key_len, CM_SEED);
+  } else if (ktype == CM_U32 || ktype == CM_HNDL) {
     key_len = sizeof(uint32_t);
     key_hash = *(const uint32_t *)key;
-  } else if (ktype == QM_PTR) {
+  } else if (ktype == CM_PTR) {
     key_len = sizeof(void *);
-    key_hash = XXH32(key, key_len, QM_SEED);
+    key_hash = XXH32(key, key_len, CM_SEED);
   } else {
     key_len = type->measure ? type->measure(key) : type->len;
     key_hash = type->hash(key, key_len);
@@ -358,42 +358,42 @@ qmap_id_ex(uint32_t hd, const void * const key,
   if (key_hash_out)
     *key_hash_out = key_hash;
 
-  return qmap_id_hash(hd, key, key_len, key_hash);
+  return corm_id_hash(hd, key, key_len, key_hash);
 }
 
   static inline uint32_t
-qmap_id_hash(uint32_t hd, const void * const key,
+corm_id_hash(uint32_t hd, const void * const key,
     size_t key_len, uint32_t key_hash)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
-  uint32_t ktype = head->types[QM_KEY];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
+  uint32_t ktype = head->types[CM_KEY];
   uint32_t id = key_hash & head->mask;
   uint32_t probe_count = 0;
 
   while (1) {
-    uint32_t n = qmap->map[id];
+    uint32_t n = corm->map[id];
 
-    if (n == QM_MISS)
+    if (n == CM_MISS)
       return id;
 
-    if (qmap->key_hashes[n] == key_hash) {
-      const void *okey = qmap_key(hd, n);
+    if (corm->key_hashes[n] == key_hash) {
+      const void *okey = corm_key(hd, n);
       if (okey) {
-        if (ktype == QM_STR) {
+        if (ktype == CM_STR) {
           if (memcmp(okey, key, key_len) == 0)
             return id;
-        } else if (ktype == QM_U32 || ktype == QM_HNDL) {
+        } else if (ktype == CM_U32 || ktype == CM_HNDL) {
           if (*(const uint32_t *)okey == *(const uint32_t *)key)
             return id;
-        } else if (ktype == QM_PTR) {
+        } else if (ktype == CM_PTR) {
           if (*(const void * const *)okey == *(const void * const *)key)
             return id;
         } else {
-          qmap_type_t *type = &qmap_types[ktype];
+          corm_type_t *type = &corm_types[ktype];
           size_t len;
           if (type->measure) {
-            size_t okey_len = qmap->key_sizes[n];
+            size_t okey_len = corm->key_sizes[n];
             if (okey_len != key_len)
               goto next_probe;
             len = key_len;
@@ -410,14 +410,14 @@ next_probe:
     id = (id + 1) & head->mask;
 
     if (++probe_count >= head->m)
-      return QM_MISS;
+      return CM_MISS;
   }
 }
 
   static inline uint32_t
-qmap_id(uint32_t hd, const void * const key)
+corm_id(uint32_t hd, const void * const key)
 {
-  return qmap_id_ex(hd, key, NULL, NULL);
+  return corm_id_ex(hd, key, NULL, NULL);
 }
 
 /* Close the hole left by clearing map[d] by shifting the following cluster
@@ -431,10 +431,10 @@ qmap_id(uint32_t hd, const void * const key)
  * Only slot -> position entries move; per-key duplicate chains store
  * positions, so they are unaffected. O(cluster). */
   static inline void
-qmap_backshift(uint32_t hd, uint32_t d)
+corm_backshift(uint32_t hd, uint32_t d)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
   uint32_t mask = head->mask;
   uint32_t j = d;
   uint32_t probe_count = 0;
@@ -443,50 +443,50 @@ qmap_backshift(uint32_t hd, uint32_t d)
     j = (j + 1) & mask;
     probe_count++;
 
-    uint32_t p = qmap->map[j];
-    if (p == QM_MISS)
+    uint32_t p = corm->map[j];
+    if (p == CM_MISS)
       break;
 
-    uint32_t ideal = qmap->key_hashes[p] & mask;
+    uint32_t ideal = corm->key_hashes[p] & mask;
     if ((uint32_t)(d - ideal) < (uint32_t)(j - ideal)) {
-      qmap->map[d] = p;
-      qmap->map[j] = QM_MISS;
+      corm->map[d] = p;
+      corm->map[j] = CM_MISS;
       d = j;
     }
   }
 }
 
 /* Append position n to the duplicate chain rooted at head (tail-append
- * preserves insertion order). n's next pointer is reset to QM_MISS. */
+ * preserves insertion order). n's next pointer is reset to CM_MISS. */
   static inline void
-qmap_mv_link(qmap_t *qmap, uint32_t head, uint32_t n)
+corm_mv_link(corm_t *corm, uint32_t head, uint32_t n)
 {
   uint32_t tail = head;
-  while (qmap->mv_next[tail] != QM_MISS)
-    tail = qmap->mv_next[tail];
-  qmap->mv_next[tail] = n;
-  qmap->mv_next[n] = QM_MISS;
+  while (corm->mv_next[tail] != CM_MISS)
+    tail = corm->mv_next[tail];
+  corm->mv_next[tail] = n;
+  corm->mv_next[n] = CM_MISS;
 }
 
 /* Unlink position n from the chain rooted at head; return the promoted
- * head (the next duplicate, or QM_MISS when n was the only member). n's
- * next pointer is reset to QM_MISS. */
+ * head (the next duplicate, or CM_MISS when n was the only member). n's
+ * next pointer is reset to CM_MISS. */
   static uint32_t
-qmap_mv_unlink(qmap_t *qmap, uint32_t head, uint32_t n)
+corm_mv_unlink(corm_t *corm, uint32_t head, uint32_t n)
 {
-  uint32_t prev = QM_MISS, p = head;
-  while (p != QM_MISS && p != n) {
+  uint32_t prev = CM_MISS, p = head;
+  while (p != CM_MISS && p != n) {
     prev = p;
-    p = qmap->mv_next[p];
+    p = corm->mv_next[p];
   }
-  if (p == QM_MISS) {
+  if (p == CM_MISS) {
     /* Not a member of this chain; leave everything untouched */
     return head;
   }
-  if (prev == QM_MISS)
-    return qmap->mv_next[n];
-  qmap->mv_next[prev] = qmap->mv_next[n];
-  qmap->mv_next[n] = QM_MISS;
+  if (prev == CM_MISS)
+    return corm->mv_next[n];
+  corm->mv_next[prev] = corm->mv_next[n];
+  corm->mv_next[n] = CM_MISS;
   return head;
 }
 
@@ -495,24 +495,24 @@ qmap_mv_unlink(qmap_t *qmap, uint32_t head, uint32_t n)
 /* B-TREE SUPPORT HELPERS {{{ */
 
   static int
-qmap_n_cmp(const void *a, const void *b)
+corm_n_cmp(const void *a, const void *b)
 {
   uint32_t n_a = *(const uint32_t *)a;
   uint32_t n_b = *(const uint32_t *)b;
 
-  const void *key_a = qmap_key(_qsort_cmp_hd, n_a);
-  const void *key_b = qmap_key(_qsort_cmp_hd, n_b);
+  const void *key_a = corm_key(_qsort_cmp_hd, n_a);
+  const void *key_b = corm_key(_qsort_cmp_hd, n_b);
 
   if (key_a == NULL || key_b == NULL)
     return 0;
 
-  qmap_head_t *head = &qmap_heads[_qsort_cmp_hd];
-  qmap_t *qmap = &qmaps[_qsort_cmp_hd];
-  qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
+  corm_head_t *head = &corm_heads[_qsort_cmp_hd];
+  corm_t *corm = &corms[_qsort_cmp_hd];
+  corm_type_t *type = &corm_types[head->types[CM_KEY]];
 
   if (type->measure) {
-    size_t len_a = qmap->key_sizes[n_a];
-    size_t len_b = qmap->key_sizes[n_b];
+    size_t len_a = corm->key_sizes[n_a];
+    size_t len_b = corm->key_sizes[n_b];
     size_t len = (len_a > len_b) ? len_a : len_b;
     return type->cmp(key_a, key_b, len);
   }
@@ -521,52 +521,52 @@ qmap_n_cmp(const void *a, const void *b)
 }
 
   static void
-qmap_rebuild_sorted(uint32_t hd)
+corm_rebuild_sorted(uint32_t hd)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
   uint32_t n_idx = 0;
 
-  for (uint32_t n = 0; n < qmap->idm.last; n++) {
-    if (qmap->omap[n] != NULL)
-      qmap->sorted_idx[n_idx++] = n;
+  for (uint32_t n = 0; n < corm->idm.last; n++) {
+    if (corm->omap[n] != NULL)
+      corm->sorted_idx[n_idx++] = n;
   }
   head->sorted_n = n_idx;
 
   _qsort_cmp_hd = hd;
-  qsort(qmap->sorted_idx, head->sorted_n,
-      sizeof(uint32_t), qmap_n_cmp);
+  qsort(corm->sorted_idx, head->sorted_n,
+      sizeof(uint32_t), corm_n_cmp);
 
-  head->iflags &= ~QM_SDIRTY;
+  head->iflags &= ~CM_SDIRTY;
 }
 
 /* Binary search modes */
 enum {
-  QMAP_BSEARCH_ANY = 0,    /* Find any match (original behavior) */
-  QMAP_BSEARCH_FIRST = 1,  /* Find first occurrence */
-  QMAP_BSEARCH_LAST = 2    /* Find last occurrence */
+  CORM_BSEARCH_ANY = 0,    /* Find any match (original behavior) */
+  CORM_BSEARCH_FIRST = 1,  /* Find first occurrence */
+  CORM_BSEARCH_LAST = 2    /* Find last occurrence */
 };
 
 /* Unified binary search with mode parameter.
- * For QMAP_BSEARCH_ANY: returns insertion point if not found, sets *exact
- * For QMAP_BSEARCH_FIRST/LAST: returns position or -1 if not found */
+ * For CORM_BSEARCH_ANY: returns insertion point if not found, sets *exact
+ * For CORM_BSEARCH_FIRST/LAST: returns position or -1 if not found */
   static int
-qmap_bsearch_ex(uint32_t hd, const void *key, int *exact, int mode)
+corm_bsearch_ex(uint32_t hd, const void *key, int *exact, int mode)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
   int result = -1;
 
-  if (head->iflags & QM_SDIRTY)
-    qmap_rebuild_sorted(hd);
+  if (head->iflags & CM_SDIRTY)
+    corm_rebuild_sorted(hd);
 
   if (head->sorted_n == 0) {
     if (exact) *exact = 0;
-    return (mode == QMAP_BSEARCH_ANY) ? 0 : -1;
+    return (mode == CORM_BSEARCH_ANY) ? 0 : -1;
   }
 
-  qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
-  size_t key_len = qmap_len(head->types[QM_KEY], key);
+  corm_type_t *type = &corm_types[head->types[CM_KEY]];
+  size_t key_len = corm_len(head->types[CM_KEY], key);
   int low = 0, high = (int) head->sorted_n - 1;
   int mid = 0;
 
@@ -574,11 +574,11 @@ qmap_bsearch_ex(uint32_t hd, const void *key, int *exact, int mode)
 
   while (low <= high) {
     mid = low + (high - low) / 2;
-    const void *mid_key = qmap_key(hd, qmap->sorted_idx[mid]);
+    const void *mid_key = corm_key(hd, corm->sorted_idx[mid]);
 
     size_t len;
     if (type->measure) {
-      size_t mid_len = qmap->key_sizes[qmap->sorted_idx[mid]];
+      size_t mid_len = corm->key_sizes[corm->sorted_idx[mid]];
       len = (key_len > mid_len) ? key_len : mid_len;
     } else
       len = type->len;
@@ -588,11 +588,11 @@ qmap_bsearch_ex(uint32_t hd, const void *key, int *exact, int mode)
     if (cmp == 0) {
       if (exact) *exact = 1;
       result = mid;
-      if (mode == QMAP_BSEARCH_ANY)
+      if (mode == CORM_BSEARCH_ANY)
         return mid;  /* Return immediately for ANY mode */
-      else if (mode == QMAP_BSEARCH_FIRST)
+      else if (mode == CORM_BSEARCH_FIRST)
         high = mid - 1;  /* Continue searching left */
-      else /* QMAP_BSEARCH_LAST */
+      else /* CORM_BSEARCH_LAST */
         low = mid + 1;   /* Continue searching right */
     } else if (cmp < 0)
       low = mid + 1;
@@ -600,36 +600,36 @@ qmap_bsearch_ex(uint32_t hd, const void *key, int *exact, int mode)
       high = mid - 1;
   }
 
-  return (mode == QMAP_BSEARCH_ANY && (exact == NULL || !*exact)) ? low : result;
+  return (mode == CORM_BSEARCH_ANY && (exact == NULL || !*exact)) ? low : result;
 }
 
-/* Wrapper for backward compatibility with original qmap_bsearch */
+/* Wrapper for backward compatibility with original corm_bsearch */
   static inline int
-qmap_bsearch(uint32_t hd, const void *key, int *exact)
+corm_bsearch(uint32_t hd, const void *key, int *exact)
 {
-  return qmap_bsearch_ex(hd, key, exact, QMAP_BSEARCH_ANY);
+  return corm_bsearch_ex(hd, key, exact, CORM_BSEARCH_ANY);
 }
 
 /* OPEN / INITIALIZATION {{{ */
 
 /* Low level way of opening databases. */
   static uint32_t
-_qmap_open(uint32_t ktype, uint32_t vtype,
+_corm_open(uint32_t ktype, uint32_t vtype,
     uint32_t mask, uint32_t flags)
 {
   uint32_t hd = idm_new(&idm);
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
   uint32_t len;
   size_t ids_len;
 
-  mask = mask ? mask : QM_DEFAULT_MASK;
+  mask = mask ? mask : CM_DEFAULT_MASK;
 
-  /* QM_MULTIVALUE requires QM_SORTED */
-  if ((flags & QM_MULTIVALUE) && !(flags & QM_SORTED)) {
-    fprintf(stderr, "qmap: QM_MULTIVALUE requires QM_SORTED flag\n");
+  /* CM_MULTIVALUE requires CM_SORTED */
+  if ((flags & CM_MULTIVALUE) && !(flags & CM_SORTED)) {
+    fprintf(stderr, "corm: CM_MULTIVALUE requires CM_SORTED flag\n");
     idm_del(&idm, hd);
-    return QM_MISS;
+    return CM_MISS;
   }
 
   DEBUG(1, "%u %u 0x%x %u\n",
@@ -641,68 +641,68 @@ _qmap_open(uint32_t ktype, uint32_t vtype,
   CBUG((len & mask) != 0, "mask must be 2^k - 1\n");
   ids_len = len * sizeof(uint32_t);
 
-  qmap->map = malloc(ids_len);
-  qmap->omap = malloc(len * sizeof(void *));
-  CBUG(!(qmap->map && qmap->omap), "malloc error\n");
-  qmap->idm = idm_init();
-  qmap->linked = ids_init();
+  corm->map = malloc(ids_len);
+  corm->omap = malloc(len * sizeof(void *));
+  CBUG(!(corm->map && corm->omap), "malloc error\n");
+  corm->idm = idm_init();
+  corm->linked = ids_init();
 
   head->m = len;
-  head->types[QM_KEY] = ktype;
-  head->types[QM_VALUE] = vtype;
+  head->types[CM_KEY] = ktype;
+  head->types[CM_VALUE] = vtype;
   head->mask = mask;
   head->flags = flags;
   head->phd = hd;
 
   // STORE {{{
-  qmap->table = malloc(sizeof(void *) * len);
-  CBUG(!qmap->table, "malloc error (table)\n");
-  memset(qmap->table, 0, sizeof(void *) * len);
+  corm->table = malloc(sizeof(void *) * len);
+  CBUG(!corm->table, "malloc error (table)\n");
+  memset(corm->table, 0, sizeof(void *) * len);
   // }}}
 
-  qmap->key_hashes = calloc(len, sizeof(*qmap->key_hashes));
-  CBUG(!qmap->key_hashes, "malloc error (key_hashes)\n");
+  corm->key_hashes = calloc(len, sizeof(*corm->key_hashes));
+  CBUG(!corm->key_hashes, "malloc error (key_hashes)\n");
 
-  qmap->mv_next = malloc(sizeof(uint32_t) * len);
-  CBUG(!qmap->mv_next, "malloc error (mv_next)\n");
-  memset(qmap->mv_next, 0xFF, sizeof(uint32_t) * len);   /* QM_MISS */
+  corm->mv_next = malloc(sizeof(uint32_t) * len);
+  CBUG(!corm->mv_next, "malloc error (mv_next)\n");
+  memset(corm->mv_next, 0xFF, sizeof(uint32_t) * len);   /* CM_MISS */
 
-  if (flags & QM_SORTED) {
-    qmap->sorted_idx = malloc(sizeof(uint32_t) * len);
-    CBUG(!qmap->sorted_idx, "malloc error (sorted_idx)\n");
+  if (flags & CM_SORTED) {
+    corm->sorted_idx = malloc(sizeof(uint32_t) * len);
+    CBUG(!corm->sorted_idx, "malloc error (sorted_idx)\n");
   } else
-    qmap->sorted_idx = NULL;
+    corm->sorted_idx = NULL;
 
-  qmap->key_sizes = calloc(len, sizeof(*qmap->key_sizes));
-  qmap->val_sizes = calloc(len, sizeof(*qmap->val_sizes));
-  CBUG(!(qmap->key_sizes && qmap->val_sizes), "malloc error (size arrays)\n");
+  corm->key_sizes = calloc(len, sizeof(*corm->key_sizes));
+  corm->val_sizes = calloc(len, sizeof(*corm->val_sizes));
+  CBUG(!(corm->key_sizes && corm->val_sizes), "malloc error (size arrays)\n");
 
-  head->iflags |= QM_SDIRTY;
+  head->iflags |= CM_SDIRTY;
   head->sorted_n = 0;
 
-  memset(qmap->map, 0xFF, ids_len);
-  memset(qmap->omap, 0, sizeof(void *) * len);
+  memset(corm->map, 0xFF, ids_len);
+  memset(corm->omap, 0, sizeof(void *) * len);
 
   return hd;
 }
 
 static inline void
-qmap_load_file(char *filename, uint32_t dbid);
+corm_load_file(char *filename, uint32_t dbid);
 
 static inline uint32_t
-_qmap_put(uint32_t hd, const void * key,
+_corm_put(uint32_t hd, const void * key,
     const void *value, uint32_t pn);
 
   static void
-qmap_rebuild_map(uint32_t hd)
+corm_rebuild_map(uint32_t hd)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
 
-  memset(qmap->map, 0xFF,
+  memset(corm->map, 0xFF,
       sizeof(uint32_t) * head->m);
 
-  /* For QM_MULTIVALUE maps, duplicate chains live entirely in qmap->mv_next[]
+  /* For CM_MULTIVALUE maps, duplicate chains live entirely in corm->mv_next[]
    * (per-key, in insertion order) and are NOT rebuilt here. The hash table
    * must simply re-point each key's home slot at its chain head. Positions
    * are stable across whole-key deletes and slot reclaims, so the existing
@@ -710,44 +710,44 @@ qmap_rebuild_map(uint32_t hd)
    * member links to it via mv_next. (Rebuilding chains by position order
    * instead would scramble insertion order the moment a freed low slot is
    * reclaimed by a later duplicate.) */
-  int mv = (head->flags & QM_MULTIVALUE) != 0;
+  int mv = (head->flags & CM_MULTIVALUE) != 0;
   uint32_t *has_pred = NULL;
   if (mv) {
-    has_pred = malloc(sizeof(uint32_t) * qmap->idm.last);
+    has_pred = malloc(sizeof(uint32_t) * corm->idm.last);
     CBUG(!has_pred, "malloc error (has_pred)\n");
-    for (uint32_t i = 0; i < qmap->idm.last; i++)
+    for (uint32_t i = 0; i < corm->idm.last; i++)
       has_pred[i] = 0;
     /* Mark every live position that a live chain member links to. */
-    for (uint32_t n = 0; n < qmap->idm.last; n++) {
-      if (!qmap->omap[n])
+    for (uint32_t n = 0; n < corm->idm.last; n++) {
+      if (!corm->omap[n])
         continue;
-      uint32_t mvn = qmap->mv_next[n];
-      if (mvn != QM_MISS && mvn < qmap->idm.last && qmap->omap[mvn])
+      uint32_t mvn = corm->mv_next[n];
+      if (mvn != CM_MISS && mvn < corm->idm.last && corm->omap[mvn])
         has_pred[mvn] = 1;
     }
   }
 
-  for (uint32_t n = 0; n < qmap->idm.last; n++) {
-    const void *key = qmap->omap[n];
+  for (uint32_t n = 0; n < corm->idm.last; n++) {
+    const void *key = corm->omap[n];
 
     if (!key)
       continue;
 
     uint32_t id;
     if (mv) {
-      id = qmap_id_hash(hd, key, qmap->key_sizes[n],
-                        qmap->key_hashes[n]);
-      if (id == QM_MISS)
+      id = corm_id_hash(hd, key, corm->key_sizes[n],
+                        corm->key_hashes[n]);
+      if (id == CM_MISS)
         continue;
       /* Only a chain head (no live predecessor) gets the home slot; the
        * chain itself is left untouched, so its order is preserved. */
       if (!has_pred[n])
-        qmap->map[id] = n;
+        corm->map[id] = n;
     } else {
-      id = qmap->key_hashes[n] & head->mask;
-      while (qmap->map[id] != QM_MISS)
+      id = corm->key_hashes[n] & head->mask;
+      while (corm->map[id] != CM_MISS)
         id = (id + 1) & head->mask;
-      qmap->map[id] = n;
+      corm->map[id] = n;
     }
   }
 
@@ -755,13 +755,13 @@ qmap_rebuild_map(uint32_t hd)
 }
 
   /* Grow one bookkeeping array to new_m slots: realloc + fill the fresh
- * tail. Every qmap_grow array funnels through here. */
+ * tail. Every corm_grow array funnels through here. */
 static void
 qchunk_grow(void **pp, uint32_t old_m, uint32_t new_m,
     size_t esize, uint8_t fill)
 {
   void *tmp = realloc(*pp, esize * new_m);
-  CBUG(!tmp, "qmap_grow: realloc");
+  CBUG(!tmp, "corm_grow: realloc");
 
   *pp = tmp;
   memset((char *)*pp + esize * old_m, fill,
@@ -769,84 +769,84 @@ qchunk_grow(void **pp, uint32_t old_m, uint32_t new_m,
 }
 
   static void
-qmap_grow(uint32_t hd)
+corm_grow(uint32_t hd)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
   uint32_t old_m = head->m;
   uint32_t new_m = old_m << 1;
 
   CBUG((new_m & (new_m - 1)) != 0,
-      "qmap_grow: capacity not power-of-two");
+      "corm_grow: capacity not power-of-two");
 
-  qchunk_grow((void **)&qmap->omap, old_m, new_m, sizeof(void *), 0);
-  if (qmap->table)
-    qchunk_grow((void **)&qmap->table, old_m, new_m, sizeof(void *), 0);
-  qchunk_grow((void **)&qmap->key_hashes, old_m, new_m,
+  qchunk_grow((void **)&corm->omap, old_m, new_m, sizeof(void *), 0);
+  if (corm->table)
+    qchunk_grow((void **)&corm->table, old_m, new_m, sizeof(void *), 0);
+  qchunk_grow((void **)&corm->key_hashes, old_m, new_m,
       sizeof(uint32_t), 0);
-  qchunk_grow((void **)&qmap->mv_next, old_m, new_m,
+  qchunk_grow((void **)&corm->mv_next, old_m, new_m,
       sizeof(uint32_t), 0xFF);
-  qchunk_grow((void **)&qmap->key_sizes, old_m, new_m, sizeof(size_t), 0);
-  qchunk_grow((void **)&qmap->val_sizes, old_m, new_m, sizeof(size_t), 0);
-  if (qmap->sorted_idx)
-    qchunk_grow((void **)&qmap->sorted_idx, old_m, new_m,
+  qchunk_grow((void **)&corm->key_sizes, old_m, new_m, sizeof(size_t), 0);
+  qchunk_grow((void **)&corm->val_sizes, old_m, new_m, sizeof(size_t), 0);
+  if (corm->sorted_idx)
+    qchunk_grow((void **)&corm->sorted_idx, old_m, new_m,
         sizeof(uint32_t), 0xFF);
 
   /* map is a full spread, not a size-up: free + fresh mask. */
-  free(qmap->map);
-  qmap->map = malloc(sizeof(uint32_t) * new_m);
-  CBUG(!qmap->map, "malloc(map)");
-  memset(qmap->map, 0xFF, sizeof(uint32_t) * new_m);
+  free(corm->map);
+  corm->map = malloc(sizeof(uint32_t) * new_m);
+  CBUG(!corm->map, "malloc(map)");
+  memset(corm->map, 0xFF, sizeof(uint32_t) * new_m);
 
   head->m = new_m;
   head->mask = new_m - 1;
 
   CBUG(head->m != head->mask + 1,
-      "qmap invariant broken");
+      "corm invariant broken");
 
-  qmap_rebuild_map(hd);
+  corm_rebuild_map(hd);
 }
 
   uint32_t /* API */
-qmap_open(const char *filename,
+corm_open(const char *filename,
     const char *database,
     uint32_t ktype, uint32_t vtype,
     uint32_t mask, uint32_t flags)
 {
   uint32_t record_id = 0;
 
-  /* ── Handle QM_RECORD flag ────────────────────────────────────────── */
-  if (flags & QM_RECORD_FLAG) {
-    record_id = QM_RECORD_ID(flags);
-    if (!record_id || record_id > qmap_records_n) {
-      fprintf(stderr, "qmap_open: unknown record_id %u\n", record_id);
-      return QM_MISS;
+  /* ── Handle CM_RECORD flag ────────────────────────────────────────── */
+  if (flags & CM_RECORD_FLAG) {
+    record_id = CM_RECORD_ID(flags);
+    if (!record_id || record_id > corm_records_n) {
+      fprintf(stderr, "corm_open: unknown record_id %u\n", record_id);
+      return CM_MISS;
     }
     /* Validate: vtype must match the registered struct type */
-    if (vtype != qmap_records[record_id].struct_type_id) {
-      fprintf(stderr, "qmap_open: record %u requires vtype=%u, got %u\n",
-              record_id, qmap_records[record_id].struct_type_id, vtype);
-      return QM_MISS;
+    if (vtype != corm_records[record_id].struct_type_id) {
+      fprintf(stderr, "corm_open: record %u requires vtype=%u, got %u\n",
+              record_id, corm_records[record_id].struct_type_id, vtype);
+      return CM_MISS;
     }
     /* Record-aware maps require string keys (composite key separator) */
-    if (ktype != QM_STR) {
-      fprintf(stderr, "qmap_open: record maps require ktype=QM_STR\n");
-      return QM_MISS;
+    if (ktype != CM_STR) {
+      fprintf(stderr, "corm_open: record maps require ktype=CM_STR\n");
+      return CM_MISS;
     }
   }
 
-  /* Strip record bits so _qmap_open doesn't see them */
-  flags &= ~(QM_RECORD_MASK | QM_RECORD_FLAG);
+  /* Strip record bits so _corm_open doesn't see them */
+  flags &= ~(CM_RECORD_MASK | CM_RECORD_FLAG);
 
   /* 2B-5 (F4): opening the same (file, map) twice with the same key/value
    * shape must alias the LIVE handle, not orphan it. The old path below
-   * registered the new handle in qmap_dbs_hd and marked the old one dead
+   * registered the new handle in corm_dbs_hd and marked the old one dead
    * (mdbs[old]=0), so the second handle's as-of-open copy won the
    * exit-save — e.g. libstoma's sidecar-scan mirror-open of the primary
    * the CLI already held silently dropped -p seeds and -d forgets.
    * Shape match = same record type, key/value types, and table mask
-   * (normalized like _qmap_open does). Membership in the file's ids proves
-   * the handle is still live (qmap_close removes it there). */
+   * (normalized like _corm_open does). Membership in the file's ids proves
+   * the handle is still live (corm_close removes it there). */
   if (filename && database) {
     char abuf[strlen(filename)
       + strlen(database) + 2];
@@ -854,11 +854,11 @@ qmap_open(const char *filename,
     snprintf(abuf, sizeof(abuf), "%s/%s",
         filename, database);
 
-    const uint32_t *eahd = qmap_get(qmap_dbs_hd, abuf);
-    uint32_t ahd = eahd ? *eahd : QM_MISS;
-    if (ahd != QM_MISS && mdbs[ahd]) {
-      const qmap_file_t *afile
-        = qmap_get(qmap_files_hd, filename);
+    const uint32_t *eahd = corm_get(corm_dbs_hd, abuf);
+    uint32_t ahd = eahd ? *eahd : CM_MISS;
+    if (ahd != CM_MISS && mdbs[ahd]) {
+      const corm_file_t *afile
+        = corm_get(corm_files_hd, filename);
       idsi_t *acur;
       uint32_t ah;
       int live = 0;
@@ -872,24 +872,24 @@ qmap_open(const char *filename,
           }
       }
       if (live) {
-        qmap_head_t *ahead = &qmap_heads[ahd];
-        uint32_t amask = mask ? mask : QM_DEFAULT_MASK;
+        corm_head_t *ahead = &corm_heads[ahd];
+        uint32_t amask = mask ? mask : CM_DEFAULT_MASK;
         if (ahead->record_id == record_id
-            && ahead->types[QM_KEY] == ktype
-            && ahead->types[QM_VALUE] == vtype
+            && ahead->types[CM_KEY] == ktype
+            && ahead->types[CM_VALUE] == vtype
             && ahead->mask == amask)
           return ahd;
       }
     }
   }
 
-  uint32_t hd = _qmap_open(ktype, vtype, mask, flags);
+  uint32_t hd = _corm_open(ktype, vtype, mask, flags);
 
   /* Check if open failed */
-  if (hd == QM_MISS)
-    return QM_MISS;
+  if (hd == CM_MISS)
+    return CM_MISS;
 
-  qmap_head_t *head = &qmap_heads[hd];
+  corm_head_t *head = &corm_heads[hd];
 
   head->record_id = record_id;
   head->vstr_hd = 0;
@@ -897,16 +897,16 @@ qmap_open(const char *filename,
 
   /* Allocate per-field inverse index handles for record-aware maps */
   if (record_id > 0) {
-    uint32_t fc = (uint32_t)qmap_records[record_id].field_count;
+    uint32_t fc = (uint32_t)corm_records[record_id].field_count;
     head->inv_hds = calloc(fc, sizeof(uint32_t));
   } else {
     head->inv_hds = NULL;
   }
   head->get_buf[0] = '\0';
   if (database)
-    head->dbid = XXH32(database, strlen(database), QM_SEED);
+    head->dbid = XXH32(database, strlen(database), CM_SEED);
   else
-    head->dbid = QM_MISS;
+    head->dbid = CM_MISS;
 
   if (!filename)
     goto file_skip;
@@ -918,70 +918,70 @@ qmap_open(const char *filename,
     snprintf(buf, sizeof(buf), "%s/%s",
         filename, database);
 
-    const uint32_t *ehd = qmap_get(qmap_dbs_hd, buf);
-    uint32_t old_hd = ehd ? *ehd : QM_MISS;
-    qmap_put(qmap_dbs_hd, buf, &hd);
+    const uint32_t *ehd = corm_get(corm_dbs_hd, buf);
+    uint32_t old_hd = ehd ? *ehd : CM_MISS;
+    corm_put(corm_dbs_hd, buf, &hd);
 
-    if (old_hd != QM_MISS && mdbs[old_hd])
+    if (old_hd != CM_MISS && mdbs[old_hd])
       mdbs[old_hd] = 0;
   }
 
   mdbs[hd] = 1;  /* Mark as dirty for save, regardless of database name */
 
-  const qmap_file_t *file_p
-    = qmap_get(qmap_files_hd, filename);
+  const corm_file_t *file_p
+    = corm_get(corm_files_hd, filename);
 
   if (!file_p) {
-    qmap_file_t file;
+    corm_file_t file;
     memset(&file, 0, sizeof(file));
     file.ids = ids_init();
     file.fd = -1;
     ids_push(&file.ids, hd);
-    qmap_put(qmap_files_hd, filename, &file);
+    corm_put(corm_files_hd, filename, &file);
   } else
     ids_push((ids_t *) &file_p->ids, hd);
 
 file_skip:
   if (filename)
-    qmap_load_file((char*) filename, head->dbid);
+    corm_load_file((char*) filename, head->dbid);
 
-  if (!(flags & QM_MIRROR))
+  if (!(flags & CM_MIRROR))
     return hd;
 
-  flags &= ~QM_AINDEX;
-  uint32_t mirror_hd = _qmap_open(vtype, ktype, mask, flags | QM_PGET);
-  qmap_heads[mirror_hd].iflags |= QM_IS_MIRROR;  /* Mark as mirror for position sharing */
-  qmap_assoc(hd + 1, hd, NULL, NULL);
+  flags &= ~CM_AINDEX;
+  uint32_t mirror_hd = _corm_open(vtype, ktype, mask, flags | CM_PGET);
+  corm_heads[mirror_hd].iflags |= CM_IS_MIRROR;  /* Mark as mirror for position sharing */
+  corm_assoc(hd + 1, hd, NULL, NULL);
 
   /* If data was loaded before mirror creation, populate the mirror now */
   if (filename && head->n > 0) {
-    uint32_t cur = qmap_iter(hd, NULL, 0);
+    uint32_t cur = corm_iter(hd, NULL, 0);
     const void *key, *value;
-    while (qmap_next(&key, &value, cur)) {
-      _qmap_put(mirror_hd, value, key, qmaps[hd].map[qmap_id(hd, key)]);
+    while (corm_next(&key, &value, cur)) {
+      _corm_put(mirror_hd, value, key, corms[hd].map[corm_id(hd, key)]);
     }
-    qmap_fin(cur);
+    corm_fin(cur);
   }
 
   return hd;
 }
 
   uint32_t /* API */
-qmap_get_vtype(uint32_t hd)
+corm_get_vtype(uint32_t hd)
 {
-  return qmap_heads[hd].types[QM_VALUE];
+  return corm_heads[hd].types[CM_VALUE];
 }
 
   uint32_t /* API */
-qmap_get_ktype(uint32_t hd)
+corm_get_ktype(uint32_t hd)
 {
-  return qmap_heads[hd].types[QM_KEY];
+  return corm_heads[hd].types[CM_KEY];
 }
 
   size_t /* API */
-qmap_type_len(uint32_t type_id)
+corm_type_len(uint32_t type_id)
 {
-  return qmap_types[type_id].len;
+  return corm_types[type_id].len;
 }
 
   static size_t
@@ -990,7 +990,7 @@ s_measure(const void *key)
   return strlen(key) + 1;
 }
 
-static void file_close(qmap_file_t *file) {
+static void file_close(corm_file_t *file) {
   if (file->mmaped) {
     CBUG(munmap(file->mmaped, file->size) == -1,
         "munmap failed");
@@ -1003,58 +1003,58 @@ static void file_close(qmap_file_t *file) {
 }
 
 __attribute__((destructor))
-  static void qmap_destruct(void) {
-    qmap_save();
+  static void corm_destruct(void) {
+    corm_save();
 
     for (uint32_t i = idm.last; i-- > 0; )
-      qmap_close(i);
+      corm_close(i);
 
     idm_drop(&cursor_idm);
     idm_drop(&idm);
 
-    uint32_t cur = qmap_iter(qmap_files_hd, NULL, 0);
+    uint32_t cur = corm_iter(corm_files_hd, NULL, 0);
     const void *key, *value;
 
-    while (qmap_next(&key, &value, cur))
-      file_close((qmap_file_t *) value);
+    while (corm_next(&key, &value, cur))
+      file_close((corm_file_t *) value);
 
-    qmap_close(qmap_dbs_hd);
-    qmap_close(qmap_files_hd);
+    corm_close(corm_dbs_hd);
+    corm_close(corm_files_hd);
   }
 
 __attribute__((constructor))
   static void
-qmap_init(void)
+corm_init(void)
 {
-  qmap_type_t *type;
+  corm_type_t *type;
 
-  memset(qmaps, 0, sizeof(qmaps));
-  memset(qmap_heads, 0, sizeof(qmap_heads));
+  memset(corms, 0, sizeof(corms));
+  memset(corm_heads, 0, sizeof(corm_heads));
 
   idm = idm_init();
   cursor_idm = idm_init();
 
-  // QM_PTR
-  type = &qmap_types[qmap_reg(sizeof(void *))];
+  // CM_PTR
+  type = &corm_types[corm_reg(sizeof(void *))];
 
-  // QM_HNDL
-  type = &qmap_types[qmap_reg(sizeof(uint32_t))];
-  type->hash = qmap_nohash;
-  type->cmp = qmap_ucmp;
+  // CM_HNDL
+  type = &corm_types[corm_reg(sizeof(uint32_t))];
+  type->hash = corm_nohash;
+  type->cmp = corm_ucmp;
 
-  // QM_STR
-  type = &qmap_types[qmap_mreg(s_measure)];
-  type->cmp = qmap_scmp;
+  // CM_STR
+  type = &corm_types[corm_mreg(s_measure)];
+  type->cmp = corm_scmp;
 
-  // QM_U32
-  type = &qmap_types[qmap_reg(sizeof(uint32_t))];
-  type->cmp = qmap_ucmp;
+  // CM_U32
+  type = &corm_types[corm_reg(sizeof(uint32_t))];
+  type->cmp = corm_ucmp;
 
-  uint32_t qm_file = qmap_reg(sizeof(qmap_file_t));
-  qmap_files_hd = _qmap_open(QM_STR, qm_file,
-      QM_DEFAULT_MASK, 0);
+  uint32_t qm_file = corm_reg(sizeof(corm_file_t));
+  corm_files_hd = _corm_open(CM_STR, qm_file,
+      CM_DEFAULT_MASK, 0);
 
-  qmap_dbs_hd = _qmap_open(QM_STR, QM_U32, QM_DEFAULT_MASK, 0);
+  corm_dbs_hd = _corm_open(CM_STR, CM_U32, CM_DEFAULT_MASK, 0);
 }
 
 /* }}} */
@@ -1067,32 +1067,32 @@ qmap_init(void)
  */
 /* Helper: Update IDM last position if needed */
   static inline void
-update_idm_last(qmap_t *qmap, uint32_t pn)
+update_idm_last(corm_t *corm, uint32_t pn)
 {
-  if (pn >= qmap->idm.last)
-    qmap->idm.last = pn + 1;
+  if (pn >= corm->idm.last)
+    corm->idm.last = pn + 1;
 }
 
 /* ── Inverse index helpers for reference fields ──────────────────────── */
 
-static void ensure_inv_hd(qmap_head_t *head, int fi)
+static void ensure_inv_hd(corm_head_t *head, int fi)
 {
   if (head->inv_hds[fi] == 0)
-    head->inv_hds[fi] = qmap_open(NULL, NULL, QM_U32, QM_STR, 0xFF, 0);
+    head->inv_hds[fi] = corm_open(NULL, NULL, CM_U32, CM_STR, 0xFF, 0);
 }
 
-static void ensure_vstr_hd(qmap_head_t *head)
+static void ensure_vstr_hd(corm_head_t *head)
 {
   if (head->vstr_hd == 0)
-    head->vstr_hd = qmap_open(NULL, NULL, QM_STR, QM_STR, 0xFF, 0);
+    head->vstr_hd = corm_open(NULL, NULL, CM_STR, CM_STR, 0xFF, 0);
 }
 
-static void inverse_add(qmap_head_t *head, int fi,
+static void inverse_add(corm_head_t *head, int fi,
     uint32_t target_pos, uint32_t source_pos)
 {
   ensure_inv_hd(head, fi);
   uint32_t inv_hd = head->inv_hds[fi];
-  const char *existing = qmap_get(inv_hd, &target_pos);
+  const char *existing = corm_get(inv_hd, &target_pos);
 
   if (existing) {
     /* Check if source_pos already present */
@@ -1110,21 +1110,21 @@ static void inverse_add(qmap_head_t *head, int fi,
     /* Append */
     char buf[4096];
     snprintf(buf, sizeof(buf), "%s%u\n", existing, source_pos);
-    qmap_put(inv_hd, &target_pos, buf);
+    corm_put(inv_hd, &target_pos, buf);
   } else {
     char buf[32];
     snprintf(buf, sizeof(buf), "%u\n", source_pos);
-    qmap_put(inv_hd, &target_pos, buf);
+    corm_put(inv_hd, &target_pos, buf);
   }
 }
 
-static void inverse_remove(qmap_head_t *head, int fi,
+static void inverse_remove(corm_head_t *head, int fi,
     uint32_t target_pos, uint32_t source_pos)
 {
   if (head->inv_hds[fi] == 0)
     return;
   uint32_t inv_hd = head->inv_hds[fi];
-  const char *existing = qmap_get(inv_hd, &target_pos);
+  const char *existing = corm_get(inv_hd, &target_pos);
   if (!existing)
     return;
 
@@ -1145,15 +1145,15 @@ static void inverse_remove(qmap_head_t *head, int fi,
   }
 
   if (pos == 0)
-    qmap_del(inv_hd, &target_pos);
+    corm_del(inv_hd, &target_pos);
   else
-    qmap_put(inv_hd, &target_pos, buf);
+    corm_put(inv_hd, &target_pos, buf);
 }
 
-static void clean_inverses_for_pos(qmap_head_t *head, uint32_t pos)
+static void clean_inverses_for_pos(corm_head_t *head, uint32_t pos)
 {
-  qmap_record_t *rec = &qmap_records[head->record_id];
-  const void *struct_ptr = qmap_val(head->phd, pos);
+  corm_record_t *rec = &corm_records[head->record_id];
+  const void *struct_ptr = corm_val(head->phd, pos);
   if (!struct_ptr)
     return;
 
@@ -1164,17 +1164,17 @@ static void clean_inverses_for_pos(qmap_head_t *head, uint32_t pos)
     size_t  fo = rec->fields[fi].offset;
     size_t  fm = rec->fields[fi].max_size;
 
-    if (ft == QM_REFERENCE) {
+    if (ft == CM_REFERENCE) {
       const char *id = (const char *)struct_ptr + fo;
       if (id && id[0]) {
         uint32_t target_hd = rec->fields[fi].target_hd;
         if (target_hd > 0) {
-          uint32_t tp = qmap_pos(target_hd, id);
+          uint32_t tp = corm_pos(target_hd, id);
           if (tp != UINT32_MAX)
             inverse_remove(head, (int)fi, tp, pos);
         }
       }
-    } else if (ft == QM_MULTI_REFERENCE && fm > 0) {
+    } else if (ft == CM_MULTI_REFERENCE && fm > 0) {
       const char *s = (const char *)struct_ptr + fo;
       while (*s) {
         char *end;
@@ -1211,12 +1211,12 @@ static size_t parse_positions(const char *s, uint32_t *pos, size_t max)
 
 /* Handle inverse index update after a field put on a reference field.
  * Called AFTER the struct has been re-put, with source_pos known. */
-static void handle_inverse_put(qmap_head_t *head, int fi,
+static void handle_inverse_put(corm_head_t *head, int fi,
     uint32_t source_pos,
     const uint8_t *old_val, const void *new_val,
     uint32_t ft, size_t fm)
 {
-  qmap_record_t *rec = &qmap_records[head->record_id];
+  corm_record_t *rec = &corm_records[head->record_id];
   (void)fm;
   if (rec->fields[fi].target_record == 0)
     return;
@@ -1224,19 +1224,19 @@ static void handle_inverse_put(qmap_head_t *head, int fi,
   uint32_t old_pos[2048], new_pos[2048];
   size_t n_old = 0, n_new = 0;
 
-  if (ft == QM_REFERENCE) {
+  if (ft == CM_REFERENCE) {
     uint32_t target_hd = rec->fields[fi].target_hd;
     const char *id = (const char *)new_val;
     if (id && id[0] && target_hd > 0) {
-      uint32_t p = qmap_pos(target_hd, id);
+      uint32_t p = corm_pos(target_hd, id);
       if (p != UINT32_MAX) new_pos[n_new++] = p;
     }
     id = (const char *)old_val;
     if (id && id[0] && target_hd > 0) {
-      uint32_t p = qmap_pos(target_hd, id);
+      uint32_t p = corm_pos(target_hd, id);
       if (p != UINT32_MAX) old_pos[n_old++] = p;
     }
-  } else if (ft == QM_MULTI_REFERENCE) {
+  } else if (ft == CM_MULTI_REFERENCE) {
     n_new = parse_positions((const char *)new_val, new_pos, 2048);
     n_old = parse_positions((const char *)old_val, old_pos, 2048);
   }
@@ -1265,16 +1265,16 @@ static void handle_inverse_put(qmap_head_t *head, int fi,
 /* }}} */
 
   static inline uint32_t
-_qmap_put(uint32_t hd, const void * key,
+_corm_put(uint32_t hd, const void * key,
     const void *value, uint32_t pn)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
 
   /* Grow before clustering gets pathological */
-  if (!(head->flags & QM_NOGROW)) {
+  if (!(head->flags & CM_NOGROW)) {
     if ((head->n + 1) * 4 >= head->m * 3)
-      qmap_grow(hd);
+      corm_grow(hd);
   }
 
   uint32_t n;
@@ -1284,37 +1284,37 @@ _qmap_put(uint32_t hd, const void * key,
   uint32_t key_hash;
   uint32_t lookup_id;
   uint32_t key_id;
-  uint32_t old_n = QM_MISS;
+  uint32_t old_n = CM_MISS;
 
   if (key) {
-    lookup_id = qmap_id_ex(hd, key, &key_len, &key_hash);
-    if (lookup_id == QM_MISS) {
-      WARN("qmap %u: probe failure after grow", hd);
-      return QM_MISS;
+    lookup_id = corm_id_ex(hd, key, &key_len, &key_hash);
+    if (lookup_id == CM_MISS) {
+      WARN("corm %u: probe failure after grow", hd);
+      return CM_MISS;
     }
-    old_n = qmap->map[lookup_id];
+    old_n = corm->map[lookup_id];
 
-    if (old_n == QM_MISS) {
-      if (pn != QM_MISS) {
+    if (old_n == CM_MISS) {
+      if (pn != CM_MISS) {
         n = pn;
         /* Update IDM to know about this position */
-        update_idm_last(qmap, pn);
+        update_idm_last(corm, pn);
       } else {
-        n = idm_new(&qmap->idm);
+        n = idm_new(&corm->idm);
       }
       head->n ++;
-    } else if (head->flags & QM_MULTIVALUE) {
-      /* QM_MULTIVALUE: Allow duplicate keys.
-       * If pn is provided (from qmap_assoc), use it.
+    } else if (head->flags & CM_MULTIVALUE) {
+      /* CM_MULTIVALUE: Allow duplicate keys.
+       * If pn is provided (from corm_assoc), use it.
        * Otherwise, allocate a new position.
        * Don't update hash table - it keeps pointing to first occurrence.
        * Duplicate is accessible via sorted_idx iteration. */
-      if (pn != QM_MISS && pn != old_n) {
+      if (pn != CM_MISS && pn != old_n) {
         n = pn;
         /* Update IDM to know about this position */
-        update_idm_last(qmap, pn);
-      } else if (pn == QM_MISS) {
-        n = idm_new(&qmap->idm);
+        update_idm_last(corm, pn);
+      } else if (pn == CM_MISS) {
+        n = idm_new(&corm->idm);
       } else {
         n = old_n;  /* pn == old_n, update in place */
       }
@@ -1324,93 +1324,93 @@ _qmap_put(uint32_t hd, const void * key,
     } else
       n = old_n;
   } else {
-    key_id = n = idm_new(&qmap->idm);
+    key_id = n = idm_new(&corm->idm);
     head->n ++;
     key = &key_id;
-    if (head->types[QM_KEY] == QM_STR) {
+    if (head->types[CM_KEY] == CM_STR) {
       static char _auto_key[32];
       snprintf(_auto_key, sizeof(_auto_key), "%u", key_id);
       key = _auto_key;
     }
-    lookup_id = qmap_id_ex(hd, key, &key_len, &key_hash);
+    lookup_id = corm_id_ex(hd, key, &key_len, &key_hash);
   }
 
   if (n >= head->m) {
-    if (head->flags & QM_NOGROW) {
+    if (head->flags & CM_NOGROW) {
       head->n--;
-      WARN("qmap %u: capacity reached (%u entries, max %u)",
+      WARN("corm %u: capacity reached (%u entries, max %u)",
           hd, head->n, head->m);
-      return QM_MISS;
+      return CM_MISS;
     }
-    qmap_grow(hd);
-    lookup_id = qmap_id_hash(hd, key, key_len, key_hash);
+    corm_grow(hd);
+    lookup_id = corm_id_hash(hd, key, key_len, key_hash);
   }
   DEBUG(2, "%u %u %u %p\n", hd, n, lookup_id, key);
 
   rkey = (void *) key;
-  qmap->key_hashes[n] = key_hash;
-  qmap->key_sizes[n] = key_len;
+  corm->key_hashes[n] = key_hash;
+  corm->key_sizes[n] = key_len;
 
   if (head->phd == hd) {
-    if (head->types[QM_VALUE] == QM_PTR)
+    if (head->types[CM_VALUE] == CM_PTR)
       value = &value;
 
-    klen = qmap_len(head->types[QM_VALUE], aval);
+    klen = corm_len(head->types[CM_VALUE], aval);
 
-    if (qmap->map[lookup_id] == n) {
-      const void *old_key = qmap_key(hd, n);
-      size_t off = qmap_payload_off(key_len);
-      size_t need = qmap_payload_off(key_len) + klen;
+    if (corm->map[lookup_id] == n) {
+      const void *old_key = corm_key(hd, n);
+      size_t off = corm_payload_off(key_len);
+      size_t need = corm_payload_off(key_len) + klen;
 
       /* Reuse key allocation if key/value fit in the existing block. */
-      if (qmap->key_sizes[n] == key_len &&
+      if (corm->key_sizes[n] == key_len &&
           memcmp(old_key, key, key_len) == 0 &&
-          qmap_payload_cap(old_key) >= need) {
+          corm_payload_cap(old_key) >= need) {
         rkey = (void *) old_key;
         rval = (void *) ((char *) rkey + off);
       } else {
-        qmap_payload_free(qmap, (void *) old_key);
-        rkey = qmap_payload_alloc(qmap, key_len, klen);
+        corm_payload_free(corm, (void *) old_key);
+        rkey = corm_payload_alloc(corm, key_len, klen);
         rval = (void *) ((char *) rkey + off);
       }
 
       memcpy(rkey, key, key_len);
       memcpy(rval, value, klen);
-      qmap->key_sizes[n] = key_len;
-      qmap->val_sizes[n] = klen;
+      corm->key_sizes[n] = key_len;
+      corm->val_sizes[n] = klen;
     } else {
       /* New entry - allocate fresh */
-      size_t off = qmap_payload_off(key_len);
-      rkey = qmap_payload_alloc(qmap, key_len, klen);
+      size_t off = corm_payload_off(key_len);
+      rkey = corm_payload_alloc(corm, key_len, klen);
       rval = (void *) ((char *) rkey + off);
       memcpy(rkey, key, key_len);
       memcpy(rval, value, klen);
-      qmap->key_sizes[n] = key_len;
-      qmap->val_sizes[n] = klen;
+      corm->key_sizes[n] = key_len;
+      corm->val_sizes[n] = klen;
     }
 
-    * VAL_ADDR(qmap, n) = rval;
+    * VAL_ADDR(corm, n) = rval;
   }
 
-  qmap->omap[n] = rkey;
+  corm->omap[n] = rkey;
 
-  /* QM_MULTIVALUE duplicate chains: freshly-allocated duplicate positions
+  /* CM_MULTIVALUE duplicate chains: freshly-allocated duplicate positions
    * are linked into the key's chain (head = first occurrence in map).
-   * Mirrors/shared-position puts (pn != QM_MISS, n != old_n) and in-place
+   * Mirrors/shared-position puts (pn != CM_MISS, n != old_n) and in-place
    * updates (n == old_n) are not chained. */
-  if (head->flags & QM_MULTIVALUE) {
-    if (pn == QM_MISS) {
-      qmap->mv_next[n] = QM_MISS;
-      if (old_n != QM_MISS)
-        qmap_mv_link(qmap, old_n, n);
+  if (head->flags & CM_MULTIVALUE) {
+    if (pn == CM_MISS) {
+      corm->mv_next[n] = CM_MISS;
+      if (old_n != CM_MISS)
+        corm_mv_link(corm, old_n, n);
     } else if (n != old_n) {
-      qmap->mv_next[n] = QM_MISS;
+      corm->mv_next[n] = CM_MISS;
     }
   }
 
-  /* For QM_MULTIVALUE duplicates, don't update hash table */
-  if (!(head->flags & QM_MULTIVALUE) || qmap->map[lookup_id] == QM_MISS || qmap->map[lookup_id] == n)
-    qmap->map[lookup_id] = n;
+  /* For CM_MULTIVALUE duplicates, don't update hash table */
+  if (!(head->flags & CM_MULTIVALUE) || corm->map[lookup_id] == CM_MISS || corm->map[lookup_id] == n)
+    corm->map[lookup_id] = n;
 
   /* When sharing a position with the primary on updates, a different
    * secondary key may overwrite the same position. Clear any stale hash
@@ -1419,32 +1419,32 @@ _qmap_put(uint32_t hd, const void * key,
    * backshift cannot displace this put's own head entry. The stale slot
    * cannot be located by key probe (the former key is gone), so this stays
    * a scan; it only fires on the shared-position mirror path. */
-  if (head->phd != hd && pn != QM_MISS) {
+  if (head->phd != hd && pn != CM_MISS) {
     for (uint32_t i = 0; i < head->m; i++) {
-      if (qmap->map[i] == n) {
-        qmap->map[i] = QM_MISS;
+      if (corm->map[i] == n) {
+        corm->map[i] = CM_MISS;
         if (i != lookup_id)
-          qmap_backshift(hd, i);
+          corm_backshift(hd, i);
         else
-          qmap->map[lookup_id] = n;
+          corm->map[lookup_id] = n;
         break;
       }
     }
   }
 
-  head->iflags |= QM_SDIRTY;
+  head->iflags |= CM_SDIRTY;
 
   return lookup_id;
 }
 
   uint32_t /* API */
-qmap_put(uint32_t hd, const void * const key,
+corm_put(uint32_t hd, const void * const key,
     const void * const value)
 {
   uint32_t ahd, n, id;
   idsi_t *cur;
   const void *rkey, *rval;
-  qmap_head_t *head = &qmap_heads[hd];
+  corm_head_t *head = &corm_heads[hd];
 
   /* ── Field-level put for record-aware maps ────────────────────────── */
   if (head->record_id > 0) {
@@ -1454,74 +1454,74 @@ qmap_put(uint32_t hd, const void * const key,
       size_t sk_len = (size_t)(colon - k);
       char struct_key[256];
       if (sk_len >= sizeof(struct_key))
-        return QM_MISS;
+        return CM_MISS;
       memcpy(struct_key, k, sk_len);
       struct_key[sk_len] = '\0';
       const char *field_name = colon + 1;
 
-      int fi = qmap_record_find_field(head->record_id, field_name);
+      int fi = corm_record_find_field(head->record_id, field_name);
       if (fi < 0)
-        return QM_MISS;
+        return CM_MISS;
 
-      size_t struct_size = qmap_records[head->record_id].struct_size;
+      size_t struct_size = corm_records[head->record_id].struct_size;
 
       /* Get or create the struct entry */
-      void *struct_ptr = (void *)qmap_get(hd, struct_key);
+      void *struct_ptr = (void *)corm_get(hd, struct_key);
       if (!struct_ptr) {
         void *tmp = calloc(1, struct_size);
-        if (!tmp) return QM_MISS;
-        if (qmap_put(hd, struct_key, tmp) == QM_MISS) {
+        if (!tmp) return CM_MISS;
+        if (corm_put(hd, struct_key, tmp) == CM_MISS) {
           free(tmp);
-          return QM_MISS;
+          return CM_MISS;
         }
         free(tmp);
-        struct_ptr = (void *)qmap_get(hd, struct_key);
+        struct_ptr = (void *)corm_get(hd, struct_key);
       }
 
       /* Write the field value */
-      uint32_t ft = qmap_records[head->record_id].fields[fi].type;
-      size_t  fo = qmap_records[head->record_id].fields[fi].offset;
-      size_t  fm = qmap_records[head->record_id].fields[fi].max_size;
+      uint32_t ft = corm_records[head->record_id].fields[fi].type;
+      size_t  fo = corm_records[head->record_id].fields[fi].offset;
+      size_t  fm = corm_records[head->record_id].fields[fi].max_size;
 
-      if (ft == QM_VSTR) {
-        /* QM_VSTR: store directly under composite key in vstr map,
+      if (ft == CM_VSTR) {
+        /* CM_VSTR: store directly under composite key in vstr map,
          * bypassing struct modification entirely. */
         ensure_vstr_hd(head);
-        return qmap_put(head->vstr_hd, key, value);
+        return corm_put(head->vstr_hd, key, value);
       }
 
       /* Save old field value for inverse diff */
-      size_t old_sz = (ft == QM_STR || ft == QM_REFERENCE || ft == QM_MULTI_REFERENCE) ? fm : sizeof(uint32_t);
+      size_t old_sz = (ft == CM_STR || ft == CM_REFERENCE || ft == CM_MULTI_REFERENCE) ? fm : sizeof(uint32_t);
       uint8_t old_val_stack[8192];
       uint8_t *old_val = NULL;
       if (head->inv_hds) {
         if (old_sz > sizeof(old_val_stack)) {
           old_val = malloc(old_sz);
-          if (!old_val) return QM_MISS;
+          if (!old_val) return CM_MISS;
         } else {
           old_val = old_val_stack;
         }
         memcpy(old_val, (char *)struct_ptr + fo, old_sz);
       }
 
-      if (ft == QM_STR && fm > 0) {
+      if (ft == CM_STR && fm > 0) {
         strncpy((char *)struct_ptr + fo, (const char *)value, fm - 1);
         *((char *)struct_ptr + fo + fm - 1) = '\0';
-      } else if (ft == QM_REFERENCE && fm > 0) {
+      } else if (ft == CM_REFERENCE && fm > 0) {
         strncpy((char *)struct_ptr + fo, (const char *)value, fm - 1);
         *((char *)struct_ptr + fo + fm - 1) = '\0';
-      } else if (ft == QM_MULTI_REFERENCE && fm > 0) {
+      } else if (ft == CM_MULTI_REFERENCE && fm > 0) {
         strncpy((char *)struct_ptr + fo, (const char *)value, fm - 1);
         *((char *)struct_ptr + fo + fm - 1) = '\0';
       } else {
-        size_t val_len = qmap_len(ft, value);
+        size_t val_len = corm_len(ft, value);
         memcpy((char *)struct_ptr + fo, value, val_len);
       }
 
       /* Re-put the struct */
-      uint32_t put_id = qmap_put(hd, struct_key, struct_ptr);
-      if (put_id == QM_MISS) return QM_MISS;
-      uint32_t source_pos = qmaps[hd].map[put_id];
+      uint32_t put_id = corm_put(hd, struct_key, struct_ptr);
+      if (put_id == CM_MISS) return CM_MISS;
+      uint32_t source_pos = corms[hd].map[put_id];
 
       /* Auto-maintain inverse index for reference fields */
       if (head->inv_hds) {
@@ -1536,10 +1536,10 @@ qmap_put(uint32_t hd, const void * const key,
   /* ── Whole-struct put: snapshot old struct for inverse diff ── */
   uint8_t *old_snap = NULL;
   if (head->record_id > 0 && head->inv_hds) {
-    size_t ss = qmap_records[head->record_id].struct_size;
+    size_t ss = corm_records[head->record_id].struct_size;
     old_snap = malloc(ss);
     if (old_snap) {
-      const void *old_val = qmap_get(hd, key);
+      const void *old_val = corm_get(hd, key);
       if (old_val)
         memcpy(old_snap, old_val, ss);
       else
@@ -1547,57 +1547,57 @@ qmap_put(uint32_t hd, const void * const key,
     }
   }
 
-  id = _qmap_put(hd, key, value, QM_MISS);
-  if (id == QM_MISS) {
+  id = _corm_put(hd, key, value, CM_MISS);
+  if (id == CM_MISS) {
     free(old_snap);
-    return QM_MISS;
+    return CM_MISS;
   }
-  n = qmaps[hd].map[id];
+  n = corms[hd].map[id];
 
-  cur = ids_iter(&qmaps[hd].linked);
-  rkey = qmap_key(hd, n);
-  rval = qmap_val(hd, n);
+  cur = ids_iter(&corms[hd].linked);
+  rkey = corm_key(hd, n);
+  rval = corm_val(hd, n);
 
   while (ids_next(&ahd, &cur)) {
-    qmap_t *aqmap;
-    qmap_head_t *ahead;
+    corm_t *acorm;
+    corm_head_t *ahead;
 
-    aqmap = &qmaps[ahd];
-    ahead = &qmap_heads[ahd];
+    acorm = &corms[ahd];
+    ahead = &corm_heads[ahd];
 
-    if (aqmap->m_assoc) {
+    if (acorm->m_assoc) {
       /* Multi-key association: produce multiple secondary keys.
        * Secondary is a root map storing (ref_value, primary_key). */
       const void *skeys[64];
-      size_t nkeys = aqmap->m_assoc(skeys, 64, rkey, rval, aqmap->m_assoc_userdata);
+      size_t nkeys = acorm->m_assoc(skeys, 64, rkey, rval, acorm->m_assoc_userdata);
       for (size_t i = 0; i < nkeys; i++) {
-        _qmap_put(ahd, skeys[i], rkey, QM_MISS);
+        _corm_put(ahd, skeys[i], rkey, CM_MISS);
         free((void *)skeys[i]);
       }
-    } else if (aqmap->assoc) {
+    } else if (acorm->assoc) {
       const void *skey;
 
-      aqmap->assoc(&skey, rkey, rval, aqmap->assoc_userdata);
+      acorm->assoc(&skey, rkey, rval, acorm->assoc_userdata);
 
-      /* Share positions with QM_MIRROR and non-MULTIVALUE linked maps.
+      /* Share positions with CM_MIRROR and non-MULTIVALUE linked maps.
        * MULTIVALUE linked maps keep independent positions to avoid
        * hash table repointing complexity on duplicate removal. */
-      if (ahead->iflags & QM_IS_MIRROR) {
-        _qmap_put(ahd, skey, rval, n);  /* Mirror: share position */
-      } else if (ahead->flags & QM_MULTIVALUE) {
-        _qmap_put(ahd, skey, rval, QM_MISS);  /* MULTIVALUE: independent */
+      if (ahead->iflags & CM_IS_MIRROR) {
+        _corm_put(ahd, skey, rval, n);  /* Mirror: share position */
+      } else if (ahead->flags & CM_MULTIVALUE) {
+        _corm_put(ahd, skey, rval, CM_MISS);  /* MULTIVALUE: independent */
       } else {
-        _qmap_put(ahd, skey, rval, n);  /* General: share position */
+        _corm_put(ahd, skey, rval, n);  /* General: share position */
       }
     }
   }
 
   /* ── Update inverse index for reference fields after whole-struct put ── */
   if (old_snap) {
-    qmap_record_t *rec = &qmap_records[head->record_id];
+    corm_record_t *rec = &corm_records[head->record_id];
     for (size_t fi = 0; fi < rec->field_count; fi++) {
       uint32_t ft = rec->fields[fi].type;
-      if ((ft == QM_REFERENCE || ft == QM_MULTI_REFERENCE)
+      if ((ft == CM_REFERENCE || ft == CM_MULTI_REFERENCE)
           && rec->fields[fi].target_record > 0) {
         handle_inverse_put(head, (int)fi, n,
             old_snap + rec->fields[fi].offset,
@@ -1615,12 +1615,12 @@ qmap_put(uint32_t hd, const void * const key,
 
 /* GET {{{ */
 
-static int qmap_lnext(uint32_t *sn, uint32_t cur_id);
+static int corm_lnext(uint32_t *sn, uint32_t cur_id);
 
   const void * /* API */
-qmap_get(uint32_t hd, const void * const key)
+corm_get(uint32_t hd, const void * const key)
 {
-  qmap_head_t *head = &qmap_heads[hd];
+  corm_head_t *head = &corm_heads[hd];
 
   /* ── Composite-key resolution for record-aware maps ──────────────── */
   if (head->record_id > 0) {
@@ -1634,38 +1634,38 @@ qmap_get(uint32_t hd, const void * const key)
       memcpy(struct_key, k, sk_len);
       struct_key[sk_len] = '\0';
 
-      int fi = qmap_record_find_field(head->record_id, colon + 1);
+      int fi = corm_record_find_field(head->record_id, colon + 1);
       if (fi < 0)
         return NULL;
 
-      uint32_t ft = qmap_records[head->record_id].fields[fi].type;
+      uint32_t ft = corm_records[head->record_id].fields[fi].type;
 
-      if (ft == QM_VSTR) {
-        /* QM_VSTR: look up the composite key directly in vstr map */
+      if (ft == CM_VSTR) {
+        /* CM_VSTR: look up the composite key directly in vstr map */
         if (head->vstr_hd == 0)
           return NULL;
-        return qmap_get(head->vstr_hd, k);
+        return corm_get(head->vstr_hd, k);
       }
 
-      const void *struct_ptr = qmap_get(hd, struct_key);
+      const void *struct_ptr = corm_get(hd, struct_key);
       if (!struct_ptr)
         return NULL;
 
-      size_t field_offset = qmap_records[head->record_id].fields[fi].offset;
+      size_t field_offset = corm_records[head->record_id].fields[fi].offset;
       const char *result = (const char *)struct_ptr + field_offset;
       return result;
     }
   }
 
-  uint32_t id = qmap_id(hd, key);
-  if (id == QM_MISS)
+  uint32_t id = corm_id(hd, key);
+  if (id == CM_MISS)
     return NULL;
 
-  uint32_t n = qmaps[hd].map[id];
-  if (n == QM_MISS)
+  uint32_t n = corms[hd].map[id];
+  if (n == CM_MISS)
     return NULL;
 
-  return qmap_val(hd, n);
+  return corm_val(hd, n);
 }
 
 /* }}} */
@@ -1673,154 +1673,154 @@ qmap_get(uint32_t hd, const void * const key)
 /* DELETE {{{ */
 
   static inline uint32_t
-qmap_root(uint32_t hd)
+corm_root(uint32_t hd)
 {
-  while(qmap_heads[hd].phd != hd)
-    hd = qmap_heads[hd].phd;
+  while(corm_heads[hd].phd != hd)
+    hd = corm_heads[hd].phd;
 
   return hd;
 }
 
-static void qmap_ndel(uint32_t hd, uint32_t n);
+static void corm_ndel(uint32_t hd, uint32_t n);
 
-static void qmap_ndel_topdown(uint32_t hd, uint32_t n) {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+static void corm_ndel_topdown(uint32_t hd, uint32_t n) {
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
   const void *key;
   uint32_t id, ahd;
   idsi_t *cur;
 
   // Guard against already-closed maps (omap is NULL after close)
-  if (!qmap->omap)
+  if (!corm->omap)
     return;
 
   if (n >= head->m)
     return;
 
-  key = qmap_key(hd, n);
+  key = corm_key(hd, n);
 
-  cur = ids_iter(&qmap->linked);
+  cur = ids_iter(&corm->linked);
 
   while (ids_next(&ahd, &cur)) {
-    if (qmaps[ahd].m_assoc && key) {
+    if (corms[ahd].m_assoc && key) {
       /* Multi-assoc: secondary is a root map storing (ref_val, pkey).
        * Iterate to find and delete entries whose value matches the
        * primary key being deleted. */
-      uint32_t mcur = qmap_iter(ahd, NULL, 0);
+      uint32_t mcur = corm_iter(ahd, NULL, 0);
       uint32_t msn;
       uint32_t to_del[256];
       size_t ndel = 0;
 
-      while (qmap_lnext(&msn, mcur)) {
-        const void *mval = qmap_val(ahd, msn);
-        if (mval && qmap_scmp(mval, key, 0) == 0) {
+      while (corm_lnext(&msn, mcur)) {
+        const void *mval = corm_val(ahd, msn);
+        if (mval && corm_scmp(mval, key, 0) == 0) {
           to_del[ndel++] = msn;
           if (ndel >= 256) break;
         }
       }
-      qmap_fin(mcur);
+      corm_fin(mcur);
 
       for (size_t i = 0; i < ndel; i++)
-        qmap_ndel(ahd, to_del[i]);
+        corm_ndel(ahd, to_del[i]);
     } else {
-      qmap_ndel_topdown(ahd, n);
+      corm_ndel_topdown(ahd, n);
     }
   }
 
   if (!key) {
-    qmap->omap[n] = NULL;
-    idm_del(&qmap->idm, n);
+    corm->omap[n] = NULL;
+    idm_del(&corm->idm, n);
     head->n --;
     return;
   }
 
-  /* For QM_MULTIVALUE maps, unlink position n from the key's duplicate
+  /* For CM_MULTIVALUE maps, unlink position n from the key's duplicate
    * chain (promoting the next duplicate as the slot head, or clearing the
    * slot when n was the only member). Chain mutation is O(k) and avoids
    * the sorted-index rebuild of the old bsearch-based path. */
-  uint32_t new_map_entry = QM_MISS;
-  if (head->flags & QM_MULTIVALUE) {
+  uint32_t new_map_entry = CM_MISS;
+  if (head->flags & CM_MULTIVALUE) {
     size_t dklen;
     uint32_t dkhash;
-    (void) qmap_id_ex(hd, key, &dklen, &dkhash);
-    id = qmap_id_hash(hd, key, dklen, dkhash);
-    if (id != QM_MISS) {
-      uint32_t head_pos = qmap->map[id];
-      if (head_pos != QM_MISS)
-        new_map_entry = qmap_mv_unlink(qmap, head_pos, n);
+    (void) corm_id_ex(hd, key, &dklen, &dkhash);
+    id = corm_id_hash(hd, key, dklen, dkhash);
+    if (id != CM_MISS) {
+      uint32_t head_pos = corm->map[id];
+      if (head_pos != CM_MISS)
+        new_map_entry = corm_mv_unlink(corm, head_pos, n);
     }
   } else {
-    id = qmap_id(hd, key);
+    id = corm_id(hd, key);
   }
 
   if (head->phd == hd) {
-    qmap_payload_free(qmap, (void *) key);
-    * VAL_ADDR(qmap, n) = NULL;
+    corm_payload_free(corm, (void *) key);
+    * VAL_ADDR(corm, n) = NULL;
   }
 
-  qmap->key_hashes[n] = 0;
-  qmap->key_sizes[n] = 0;
-  qmap->val_sizes[n] = 0;
+  corm->key_hashes[n] = 0;
+  corm->key_sizes[n] = 0;
+  corm->val_sizes[n] = 0;
 
-  head->iflags |= QM_SDIRTY;
+  head->iflags |= CM_SDIRTY;
 
   /* Update hash table entry */
-  if (id != QM_MISS) {
-    if (new_map_entry != QM_MISS)
-      qmap->map[id] = new_map_entry;
+  if (id != CM_MISS) {
+    if (new_map_entry != CM_MISS)
+      corm->map[id] = new_map_entry;
     else {
-      qmap->map[id] = QM_MISS;
-      qmap_backshift(hd, id);
+      corm->map[id] = CM_MISS;
+      corm_backshift(hd, id);
     }
   }
 
-  qmap->omap[n] = NULL;
-  idm_del(&qmap->idm, n);
+  corm->omap[n] = NULL;
+  idm_del(&corm->idm, n);
   head->n --;
 
 }
 
 /* Delete based on position */
 static inline void
-qmap_ndel(uint32_t hd, uint32_t n) {
-  qmap_ndel_topdown(qmap_root(hd), n);
+corm_ndel(uint32_t hd, uint32_t n) {
+  corm_ndel_topdown(corm_root(hd), n);
 }
 
   static void
-qmap_clear_fast(uint32_t hd)
+corm_clear_fast(uint32_t hd)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
 
   if (head->phd == hd) {
-    for (uint32_t n = 0; n < qmap->idm.last; n++) {
-      const void *key = qmap->omap[n];
+    for (uint32_t n = 0; n < corm->idm.last; n++) {
+      const void *key = corm->omap[n];
       if (!key)
         continue;
-      qmap_payload_free(qmap, (void *) key);
+      corm_payload_free(corm, (void *) key);
     }
   }
 
-  memset(qmap->map, 0xFF, sizeof(uint32_t) * head->m);
-  memset(qmap->omap, 0, sizeof(void *) * head->m);
-  memset(qmap->key_hashes, 0, sizeof(uint32_t) * head->m);
-  memset(qmap->mv_next, 0xFF, sizeof(uint32_t) * head->m);
-  memset(qmap->key_sizes, 0, sizeof(size_t) * head->m);
+  memset(corm->map, 0xFF, sizeof(uint32_t) * head->m);
+  memset(corm->omap, 0, sizeof(void *) * head->m);
+  memset(corm->key_hashes, 0, sizeof(uint32_t) * head->m);
+  memset(corm->mv_next, 0xFF, sizeof(uint32_t) * head->m);
+  memset(corm->key_sizes, 0, sizeof(size_t) * head->m);
   if (head->phd == hd) {
-    memset(qmap->table, 0, sizeof(void *) * head->m);
-    memset(qmap->val_sizes, 0, sizeof(size_t) * head->m);
+    memset(corm->table, 0, sizeof(void *) * head->m);
+    memset(corm->val_sizes, 0, sizeof(size_t) * head->m);
   }
 
-  idm_drop(&qmap->idm);
-  qmap->idm.last = 0;
+  idm_drop(&corm->idm);
+  corm->idm.last = 0;
   head->n = 0;
-  head->iflags |= QM_SDIRTY;
+  head->iflags |= CM_SDIRTY;
 }
 
   void /* API */
-qmap_del(uint32_t hd, const void * const key)
+corm_del(uint32_t hd, const void * const key)
 {
-  qmap_head_t *head = &qmap_heads[hd];
+  corm_head_t *head = &corm_heads[hd];
 
   /* ── Field-level delete for record-aware maps ─────────────────────── */
   if (head->record_id > 0) {
@@ -1834,45 +1834,45 @@ qmap_del(uint32_t hd, const void * const key)
       memcpy(struct_key, k, sk_len);
       struct_key[sk_len] = '\0';
 
-      int fi = qmap_record_find_field(head->record_id, colon + 1);
+      int fi = corm_record_find_field(head->record_id, colon + 1);
       if (fi < 0)
         return;
 
-      void *struct_ptr = (void *)qmap_get(hd, struct_key);
+      void *struct_ptr = (void *)corm_get(hd, struct_key);
       if (!struct_ptr)
         return;
 
-      uint32_t ft = qmap_records[head->record_id].fields[fi].type;
-      size_t   fo = qmap_records[head->record_id].fields[fi].offset;
-      size_t   fm = qmap_records[head->record_id].fields[fi].max_size;
+      uint32_t ft = corm_records[head->record_id].fields[fi].type;
+      size_t   fo = corm_records[head->record_id].fields[fi].offset;
+      size_t   fm = corm_records[head->record_id].fields[fi].max_size;
 
-      if (ft == QM_VSTR) {
-        /* QM_VSTR: delete the composite key entry from the vstr map */
+      if (ft == CM_VSTR) {
+        /* CM_VSTR: delete the composite key entry from the vstr map */
         if (head->vstr_hd) {
-          qmap_del(head->vstr_hd, k);
+          corm_del(head->vstr_hd, k);
         }
         return;
       }
 
       size_t field_size = fm;
       if (field_size == 0)
-        field_size = qmap_len(ft, NULL);
+        field_size = corm_len(ft, NULL);
 
       /* Snapshot old value for inverse cleanup */
       uint8_t old_val[8192];
-      size_t old_sz = (ft == QM_STR || ft == QM_REFERENCE || ft == QM_MULTI_REFERENCE) ? fm : sizeof(uint32_t);
+      size_t old_sz = (ft == CM_STR || ft == CM_REFERENCE || ft == CM_MULTI_REFERENCE) ? fm : sizeof(uint32_t);
       if (old_sz > sizeof(old_val)) return;
       memcpy(old_val, (char *)struct_ptr + fo, old_sz);
 
       memset((char *)struct_ptr + fo, 0, field_size);
 
       /* Re-put the struct */
-      uint32_t put_id = qmap_put(hd, struct_key, struct_ptr);
-      if (put_id == QM_MISS) return;
-      uint32_t source_pos = qmaps[hd].map[put_id];
+      uint32_t put_id = corm_put(hd, struct_key, struct_ptr);
+      if (put_id == CM_MISS) return;
+      uint32_t source_pos = corms[hd].map[put_id];
 
       /* Clean inverse: old references removed (new value is zeroed) */
-      if (head->inv_hds && (ft == QM_REFERENCE || ft == QM_MULTI_REFERENCE)) {
+      if (head->inv_hds && (ft == CM_REFERENCE || ft == CM_MULTI_REFERENCE)) {
         handle_inverse_put(head, fi, source_pos, old_val,
                            (const void*)"",
                            ft, fm);
@@ -1883,82 +1883,82 @@ qmap_del(uint32_t hd, const void * const key)
 
   uint32_t cur, sn;
 
-  if (head->flags & QM_MULTIVALUE) {
-    cur = qmap_get_multi(hd, key);
-    if (cur != QM_MISS) {
-      if (qmap_lnext(&sn, cur)) {
+  if (head->flags & CM_MULTIVALUE) {
+    cur = corm_get_multi(hd, key);
+    if (cur != CM_MISS) {
+      if (corm_lnext(&sn, cur)) {
         if (head->record_id > 0 && head->inv_hds)
           clean_inverses_for_pos(head, sn);
-        qmap_ndel(hd, sn);
+        corm_ndel(hd, sn);
       }
-      qmap_fin(cur);
+      corm_fin(cur);
     }
   } else {
-    cur = qmap_iter(hd, key, 0);
-    while (qmap_lnext(&sn, cur)) {
+    cur = corm_iter(hd, key, 0);
+    while (corm_lnext(&sn, cur)) {
       if (head->record_id > 0 && head->inv_hds)
         clean_inverses_for_pos(head, sn);
-      qmap_ndel(hd, sn);
+      corm_ndel(hd, sn);
     }
-    qmap_fin(cur);
+    corm_fin(cur);
   }
 }
 
   void
-qmap_del_all(uint32_t hd, const void * const key)
+corm_del_all(uint32_t hd, const void * const key)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
 
-  if (head->flags & QM_MULTIVALUE) {
+  if (head->flags & CM_MULTIVALUE) {
     /* Fast path: if nothing is linked to this map, bulk-delete by
      * clearing the matching slots once and rebuilding the hash table.
      * This avoids repeated probe-chain maintenance for every duplicate. */
-    uint32_t cur = qmap_get_multi(hd, key);
+    uint32_t cur = corm_get_multi(hd, key);
     uint32_t sn;
     size_t n = 0, cap = head->n ? head->n : 1;
     uint32_t *positions = malloc(sizeof(*positions) * cap);
-    int fast_path = ids_iter(&qmap->linked) == NULL && head->phd == hd;
+    int fast_path = ids_iter(&corm->linked) == NULL && head->phd == hd;
 
-    if (cur == QM_MISS) {
+    if (cur == CM_MISS) {
       free(positions);
       return;
     }
 
     CBUG(!positions, "malloc error (del_all)\n");
 
-    while (qmap_lnext(&sn, cur))
+    while (corm_lnext(&sn, cur))
       positions[n++] = sn;
 
     if (fast_path) {
       for (size_t i = 0; i < n; i++) {
         uint32_t pos = positions[i];
-        const void *old_key = qmap_key(hd, pos);
+        const void *old_key = corm_key(hd, pos);
 
-        qmap_payload_free(qmap, (void *) old_key);
-        qmap->key_sizes[pos] = 0;
-        qmap->val_sizes[pos] = 0;
-        qmap->omap[pos] = NULL;
-        * VAL_ADDR(qmap, pos) = NULL;
-        idm_del(&qmap->idm, pos);
+        corm_payload_free(corm, (void *) old_key);
+        corm->key_sizes[pos] = 0;
+        corm->val_sizes[pos] = 0;
+        corm->omap[pos] = NULL;
+        * VAL_ADDR(corm, pos) = NULL;
+        idm_del(&corm->idm, pos);
         head->n--;
       }
 
-      head->iflags |= QM_SDIRTY;
+      head->iflags |= CM_SDIRTY;
 
       if (head->n == 0)
-        memset(qmap->map, 0xFF, sizeof(uint32_t) * head->m);
+        memset(corm->map, 0xFF, sizeof(uint32_t) * head->m);
       else
-        qmap_rebuild_map(hd);
+        corm_rebuild_map(hd);
     } else {
       for (size_t i = 0; i < n; i++)
-        qmap_ndel(hd, positions[i]);
+        corm_ndel(hd, positions[i]);
     }
 
     free(positions);
   } else {
-    /* For regular maps, just call qmap_del once */
-    qmap_del(hd, key);
+    /* For regular maps, just call corm_del once */
+    corm_del(hd, key);
   }
 }
 
@@ -1967,65 +1967,65 @@ qmap_del_all(uint32_t hd, const void * const key)
 /* ITERATION {{{ */
 
   void /* API */
-qmap_fin(uint32_t cur_id)
+corm_fin(uint32_t cur_id)
 {
-  qmap_cur_t *cursor = &qmap_cursors[cur_id];
+  corm_cur_t *cursor = &corm_cursors[cur_id];
 
   if (cursor->sub_cur)
-    qmap_fin(cursor->sub_cur);
+    corm_fin(cursor->sub_cur);
 
   idm_del(&cursor_idm, cur_id);
 }
 
   uint32_t /* API */
-qmap_iter(uint32_t hd, const void * const key, uint32_t flags)
+corm_iter(uint32_t hd, const void * const key, uint32_t flags)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
   uint32_t cur_id = idm_new(&cursor_idm);
-  qmap_cur_t *cursor = &qmap_cursors[cur_id];
+  corm_cur_t *cursor = &corm_cursors[cur_id];
 
-  if (key && (flags & QM_RANGE_GE)) {
+  if (key && (flags & CM_RANGE_GE)) {
     /* Lower-bound range: iterate every entry whose key >= the starting
-     * key (all duplicates included, ascending when QM_SORTED). This is
-     * the documented QM_RANGE+QM_SORTED behavior; it must also work for
-     * QM_MULTIVALUE maps, which plain QM_RANGE narrows to the single
+     * key (all duplicates included, ascending when CM_SORTED). This is
+     * the documented CM_RANGE+CM_SORTED behavior; it must also work for
+     * CM_MULTIVALUE maps, which plain CM_RANGE narrows to the single
      * exact starting key. */
-    if (head->flags & QM_SORTED) {
+    if (head->flags & CM_SORTED) {
       /* Lower bound must be the FIRST occurrence of the starting key when
-       * it is present (qmap_bsearch_ANY could land on a middle duplicate
+       * it is present (corm_bsearch_ANY could land on a middle duplicate
        * of it), otherwise the insertion point — the first key above it. */
       int exact;
-      int first = qmap_bsearch_ex(hd, key, &exact, QMAP_BSEARCH_FIRST);
+      int first = corm_bsearch_ex(hd, key, &exact, CORM_BSEARCH_FIRST);
       cursor->pos = (exact)
         ? (uint32_t) first
-        : (uint32_t) qmap_bsearch(hd, key, NULL);
+        : (uint32_t) corm_bsearch(hd, key, NULL);
       cursor->end_pos = head->sorted_n;
     } else {
-      /* Unsorted: fall back to the linear QM_RANGE scan below, which
+      /* Unsorted: fall back to the linear CM_RANGE scan below, which
        * applies the same "key >= starting key" filter. */
       cursor->pos = cursor->end_pos = 0;
     }
-    flags |= QM_RANGE;
-  } else if (key && (head->flags & QM_MULTIVALUE)) {
-    /* For QM_MULTIVALUE maps, use sorted iteration to find all duplicates.
+    flags |= CM_RANGE;
+  } else if (key && (head->flags & CM_MULTIVALUE)) {
+    /* For CM_MULTIVALUE maps, use sorted iteration to find all duplicates.
      * Find first occurrence of this key */
-    int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
+    int first = corm_bsearch_ex(hd, key, NULL, CORM_BSEARCH_FIRST);
     cursor->pos = (first != -1) ? (uint32_t)first : head->sorted_n;
-    cursor->end_pos = QM_MISS;
+    cursor->end_pos = CM_MISS;
     /* Use sorted iteration but stop at key boundary */
-    flags |= QM_RANGE;
-  } else if (key && (flags & QM_RANGE) && (head->flags & QM_SORTED)) {
+    flags |= CM_RANGE;
+  } else if (key && (flags & CM_RANGE) && (head->flags & CM_SORTED)) {
     int exact;
-    cursor->pos = qmap_bsearch(hd, key, &exact);
+    cursor->pos = corm_bsearch(hd, key, &exact);
     cursor->end_pos = head->sorted_n;
-  } else if (key && !(flags & QM_RANGE)) {
-    uint32_t id = qmap_id(hd, key);
-    if (id == QM_MISS) {
-      cursor->pos = QM_MISS;
-      cursor->end_pos = QM_MISS;
+  } else if (key && !(flags & CM_RANGE)) {
+    uint32_t id = corm_id(hd, key);
+    if (id == CM_MISS) {
+      cursor->pos = CM_MISS;
+      cursor->end_pos = CM_MISS;
     } else {
-      cursor->pos = qmap->map[id];
+      cursor->pos = corm->map[id];
       cursor->end_pos = cursor->pos;
     }
   } else
@@ -2035,50 +2035,50 @@ qmap_iter(uint32_t hd, const void * const key, uint32_t flags)
   cursor->sub_cur = 0;
   cursor->hd = hd;
   cursor->key = key;
-  cursor->key_len = key ? qmap_len(head->types[QM_KEY], key) : 0;
+  cursor->key_len = key ? corm_len(head->types[CM_KEY], key) : 0;
   cursor->flags = flags;
   return cur_id;
 }
 
 /* low-level next */
   static int
-qmap_lnext(uint32_t *sn, uint32_t cur_id)
+corm_lnext(uint32_t *sn, uint32_t cur_id)
 {
-  register qmap_cur_t *cursor
-    = &qmap_cursors[cur_id];
-  register qmap_head_t *head = &qmap_heads[cursor->hd];
-  register qmap_t *qmap = &qmaps[cursor->hd];
+  register corm_cur_t *cursor
+    = &corm_cursors[cur_id];
+  register corm_head_t *head = &corm_heads[cursor->hd];
+  register corm_t *corm = &corms[cursor->hd];
   uint32_t n;
   const void *key;
 
-  if (cursor->flags & QM_MVCHAIN) {
-    /* Duplicate-chain walk (qmap_get_multi): yield the current position
+  if (cursor->flags & CM_MVCHAIN) {
+    /* Duplicate-chain walk (corm_get_multi): yield the current position
      * and advance to its next-duplicate link. */
-    if (cursor->pos >= qmap->idm.last)
+    if (cursor->pos >= corm->idm.last)
       goto end;
     n = cursor->pos;
-    cursor->pos = qmap->mv_next[n];
+    cursor->pos = corm->mv_next[n];
     *sn = n;
     return 1;
   }
 
-  if ((cursor->flags & QM_RANGE)
-      && (head->flags & QM_SORTED))
+  if ((cursor->flags & CM_RANGE)
+      && (head->flags & CM_SORTED))
   {
-    if (head->iflags & QM_SDIRTY)
-      qmap_rebuild_sorted(cursor->hd);
+    if (head->iflags & CM_SDIRTY)
+      corm_rebuild_sorted(cursor->hd);
 
     if (cursor->pos >= head->sorted_n)
       goto end;
 
-    n = qmap->sorted_idx[cursor->pos];
+    n = corm->sorted_idx[cursor->pos];
 
-    if (cursor->key && (head->flags & QM_MULTIVALUE)
-        && !(cursor->flags & QM_RANGE_GE)) {
-      if (cursor->end_pos == QM_MISS)
-        cursor->end_pos = (uint32_t) qmap_bsearch_ex(
+    if (cursor->key && (head->flags & CM_MULTIVALUE)
+        && !(cursor->flags & CM_RANGE_GE)) {
+      if (cursor->end_pos == CM_MISS)
+        cursor->end_pos = (uint32_t) corm_bsearch_ex(
             cursor->hd, cursor->key, NULL,
-            QMAP_BSEARCH_LAST);
+            CORM_BSEARCH_LAST);
       if (cursor->pos > cursor->end_pos)
         goto end;
     }
@@ -2091,20 +2091,20 @@ qmap_lnext(uint32_t *sn, uint32_t cur_id)
 cagain:
   n = cursor->pos;
 
-  if (n >= qmap->idm.last)
+  if (n >= corm->idm.last)
     goto end;
 
-  key = qmap_key(cursor->hd, n);
+  key = corm_key(cursor->hd, n);
   if (key == NULL) {
     cursor->pos++;
     goto cagain;
   }
 
-  if (cursor->flags & QM_RANGE) {
+  if (cursor->flags & CM_RANGE) {
     if (!cursor->key)
       goto next;
 
-    qmap_type_t *type = &qmap_types[head->types[QM_KEY]];
+    corm_type_t *type = &corm_types[head->types[CM_KEY]];
     size_t len;
 
     if (type->measure) {
@@ -2132,26 +2132,26 @@ next:
   return 1;
 end:
   idm_del(&cursor_idm, cur_id);
-  *sn = QM_MISS;
+  *sn = CM_MISS;
   return 0;
 }
 
   int /* API */
-qmap_next(const void ** ckey, const void ** cval,
+corm_next(const void ** ckey, const void ** cval,
     uint32_t cur_id)
 {
-  register qmap_cur_t *c;
+  register corm_cur_t *c;
   uint32_t sn;
-  int ret = qmap_lnext(&sn, cur_id);
+  int ret = corm_lnext(&sn, cur_id);
 
   if (!ret)
     return 0;
 
-  c = &qmap_cursors[cur_id];
+  c = &corm_cursors[cur_id];
   if (ckey)
-    *ckey = qmap_key(c->hd, sn);
+    *ckey = corm_key(c->hd, sn);
   if (cval)
-    *cval = qmap_val(c->hd, sn);
+    *cval = corm_val(c->hd, sn);
   return 1;
 }
 
@@ -2160,47 +2160,47 @@ qmap_next(const void ** ckey, const void ** cval,
 /* DROP + CLOSE + OTHERS {{{ */
 
   void /* API */
-qmap_drop(uint32_t hd)
+corm_drop(uint32_t hd)
 {
-  qmap_t *qmap = &qmaps[hd];
+  corm_t *corm = &corms[hd];
 
-  if (ids_iter(&qmap->linked) == NULL) {
-    qmap_clear_fast(hd);
+  if (ids_iter(&corm->linked) == NULL) {
+    corm_clear_fast(hd);
     return;
   }
 
-  uint32_t cur_id = qmap_iter(hd, NULL, 0), sn;
+  uint32_t cur_id = corm_iter(hd, NULL, 0), sn;
 
-  while (qmap_lnext(&sn, cur_id))
-    qmap_ndel(hd, sn);
+  while (corm_lnext(&sn, cur_id))
+    corm_ndel(hd, sn);
 }
 
   void /* API */
-qmap_close(uint32_t hd)
+corm_close(uint32_t hd)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
   idsi_t *cur;
   uint32_t ahd;
 
-  if (!qmap->omap)
+  if (!corm->omap)
     return;
 
-  qmap_drop(hd);
+  corm_drop(hd);
 
-  cur = ids_iter(&qmap->linked);
+  cur = ids_iter(&corm->linked);
   while (ids_next(&ahd, &cur))
-    qmap_close(ahd);
+    corm_close(ahd);
 
-  ids_drop(&qmap->linked);
+  ids_drop(&corm->linked);
 
   /* Close inverse index maps */
   if (head->inv_hds) {
-    uint32_t fc = head->record_id > 0 && head->record_id < qmap_records_n
-                ? (uint32_t)qmap_records[head->record_id].field_count : 0;
+    uint32_t fc = head->record_id > 0 && head->record_id < corm_records_n
+                ? (uint32_t)corm_records[head->record_id].field_count : 0;
     for (uint32_t i = 0; i < fc; i++) {
       if (head->inv_hds[i])
-        qmap_close(head->inv_hds[i]);
+        corm_close(head->inv_hds[i]);
     }
     free(head->inv_hds);
     head->inv_hds = NULL;
@@ -2208,31 +2208,31 @@ qmap_close(uint32_t hd)
 
   /* Close variable-length string map */
   if (head->vstr_hd) {
-    qmap_close(head->vstr_hd);
+    corm_close(head->vstr_hd);
     head->vstr_hd = 0;
   }
 
-  idm_drop(&qmap->idm);
-  qmap->idm.last = 0;
-  qmap_payload_flush(qmap);
-  free(qmap->map);
-  free(qmap->omap);
-  free(qmap->key_hashes);
-  free(qmap->mv_next);
-  free(qmap->key_sizes);
-  free(qmap->val_sizes);
-  if (qmap->sorted_idx)
-    free(qmap->sorted_idx);
-  if (qmap_heads[hd].phd == hd)
-    free(qmap->table);
-  qmap->omap = NULL;
+  idm_drop(&corm->idm);
+  corm->idm.last = 0;
+  corm_payload_flush(corm);
+  free(corm->map);
+  free(corm->omap);
+  free(corm->key_hashes);
+  free(corm->mv_next);
+  free(corm->key_sizes);
+  free(corm->val_sizes);
+  if (corm->sorted_idx)
+    free(corm->sorted_idx);
+  if (corm_heads[hd].phd == hd)
+    free(corm->table);
+  corm->omap = NULL;
   idm_del(&idm, hd);
 
   // remove any file associations so we don't try
   // saving it to a file after it is closed.
   if (!head->file)
     return;
-  const qmap_file_t *file = qmap_get(qmap_files_hd, head->file);
+  const corm_file_t *file = corm_get(corm_files_hd, head->file);
   if (!file)
     return;
   ids_remove((ids_t *) &file->ids, hd);
@@ -2240,112 +2240,112 @@ qmap_close(uint32_t hd)
 }
 
   void /* API */
-qmap_assoc(uint32_t hd, uint32_t link, qmap_assoc_t cb, void *userdata)
+corm_assoc(uint32_t hd, uint32_t link, corm_assoc_t cb, void *userdata)
 {
-  qmap_t *qmap = &qmaps[hd];
+  corm_t *corm = &corms[hd];
 
   if (!cb)
-    cb = qmap_rassoc;
+    cb = corm_rassoc;
 
-  ids_push(&qmaps[link].linked, hd);
+  ids_push(&corms[link].linked, hd);
 
-  qmap->assoc = cb;
-  qmap->assoc_userdata = userdata;
-  qmap_heads[hd].phd = link;
+  corm->assoc = cb;
+  corm->assoc_userdata = userdata;
+  corm_heads[hd].phd = link;
 
-  free(qmap->table);
-  qmap->table = NULL;
+  free(corm->table);
+  corm->table = NULL;
 
-  if (qmap_heads[link].n > 0) {
-    uint32_t cur = qmap_iter(link, NULL, 0);
+  if (corm_heads[link].n > 0) {
+    uint32_t cur = corm_iter(link, NULL, 0);
     const void *key, *value;
 
-    while (qmap_next(&key, &value, cur)) {
+    while (corm_next(&key, &value, cur)) {
       const void *skey;
-      qmap->assoc(&skey, key, value, qmap->assoc_userdata);
-      _qmap_put(hd, skey, value, QM_MISS);
+      corm->assoc(&skey, key, value, corm->assoc_userdata);
+      _corm_put(hd, skey, value, CM_MISS);
     }
-    qmap_fin(cur);
+    corm_fin(cur);
   }
 }
 
   void /* API */
-qmap_assoc_multi(uint32_t hd, uint32_t link, qmap_assoc_multi_t cb, void *userdata)
+corm_assoc_multi(uint32_t hd, uint32_t link, corm_assoc_multi_t cb, void *userdata)
 {
-  qmap_t *qmap = &qmaps[hd];
+  corm_t *corm = &corms[hd];
 
   if (!cb)
     return;
 
-  ids_push(&qmaps[link].linked, hd);
+  ids_push(&corms[link].linked, hd);
 
-  qmap->m_assoc = cb;
-  qmap->m_assoc_userdata = userdata;
-  qmap_heads[hd].phd = link;
+  corm->m_assoc = cb;
+  corm->m_assoc_userdata = userdata;
+  corm_heads[hd].phd = link;
 
   /* Backfill existing entries in the primary */
-  if (qmap_heads[link].n > 0) {
-    uint32_t cur = qmap_iter(link, NULL, 0);
+  if (corm_heads[link].n > 0) {
+    uint32_t cur = corm_iter(link, NULL, 0);
     const void *key, *value;
 
-    while (qmap_next(&key, &value, cur)) {
+    while (corm_next(&key, &value, cur)) {
       const void *skeys[64];
-      size_t nkeys = qmap->m_assoc(skeys, 64, key, value, qmap->m_assoc_userdata);
+      size_t nkeys = corm->m_assoc(skeys, 64, key, value, corm->m_assoc_userdata);
       for (size_t i = 0; i < nkeys; i++) {
-        _qmap_put(hd, skeys[i], key, QM_MISS);
+        _corm_put(hd, skeys[i], key, CM_MISS);
         free((void *)skeys[i]);
       }
     }
-    qmap_fin(cur);
+    corm_fin(cur);
   }
 }
 
   uint32_t /* API */
-qmap_reg(size_t len)
+corm_reg(size_t len)
 {
   if (types_n > TYPES_MASK) {
-    fprintf(stderr, "qmap_reg: type limit reached\n");
-    return QM_MISS;
+    fprintf(stderr, "corm_reg: type limit reached\n");
+    return CM_MISS;
   }
   uint32_t id = types_n ++;
-  qmap_type_t *type = &qmap_types[id];
+  corm_type_t *type = &corm_types[id];
 
-  memset(type, 0, sizeof(qmap_type_t));
+  memset(type, 0, sizeof(corm_type_t));
   type->len = len;
-  type->hash = qmap_chash;
-  type->cmp = qmap_ccmp;
+  type->hash = corm_chash;
+  type->cmp = corm_ccmp;
   return id;
 }
 
   void
-qmap_cmp_set(uint32_t ref, qmap_cmp_t *cmp)
+corm_cmp_set(uint32_t ref, corm_cmp_t *cmp)
 {
-  qmap_type_t *type = &qmap_types[ref];
+  corm_type_t *type = &corm_types[ref];
   type->cmp = cmp;
 }
 
   uint32_t /* API */
-qmap_mreg(qmap_measure_t *measure)
+corm_mreg(corm_measure_t *measure)
 {
   if (types_n > TYPES_MASK) {
-    fprintf(stderr, "qmap_mreg: type limit reached\n");
-    return QM_MISS;
+    fprintf(stderr, "corm_mreg: type limit reached\n");
+    return CM_MISS;
   }
   uint32_t id = types_n ++;
-  qmap_type_t *type = &qmap_types[id];
+  corm_type_t *type = &corm_types[id];
 
-  memset(type, 0, sizeof(qmap_type_t));
+  memset(type, 0, sizeof(corm_type_t));
   type->measure = measure;
-  type->hash = qmap_chash;
-  type->cmp = qmap_ccmp;
+  type->hash = corm_chash;
+  type->cmp = corm_ccmp;
   type->len = 0;
   return id;
 }
 
   size_t /* API */
-qmap_len(uint32_t type_id, const void *key)
+corm_len(uint32_t type_id, const void *key)
 {
-  qmap_type_t *type = &qmap_types[type_id];
+  corm_type_t *type = &corm_types[type_id];
 
   return type->measure
     ? type->measure(key)
@@ -2357,30 +2357,30 @@ qmap_len(uint32_t type_id, const void *key)
 /* RECORD-AWARE MAP SUPPORT {{{ */
 
   uint32_t /* API */
-qmap_record_register(const char *name, size_t struct_size,
-    const qmap_record_field_t *fields, size_t field_count)
+corm_record_register(const char *name, size_t struct_size,
+    const corm_record_field_t *fields, size_t field_count)
 {
-  if (qmap_records_n >= QMAP_MAX_RECORDS) {
-    fprintf(stderr, "qmap_record_register: record limit reached\n");
-    return QM_MISS;
+  if (corm_records_n >= CORM_MAX_RECORDS) {
+    fprintf(stderr, "corm_record_register: record limit reached\n");
+    return CM_MISS;
   }
   if (struct_size == 0) {
-    fprintf(stderr, "qmap_record_register: struct_size must be > 0\n");
-    return QM_MISS;
+    fprintf(stderr, "corm_record_register: struct_size must be > 0\n");
+    return CM_MISS;
   }
-  if (!fields || field_count == 0 || field_count > QMAP_MAX_RECORD_FIELDS) {
-    fprintf(stderr, "qmap_record_register: invalid fields\n");
-    return QM_MISS;
-  }
-
-  uint32_t struct_type_id = qmap_reg(struct_size);
-  if (struct_type_id == QM_MISS) {
-    fprintf(stderr, "qmap_record_register: qmap_reg failed\n");
-    return QM_MISS;
+  if (!fields || field_count == 0 || field_count > CORM_MAX_RECORD_FIELDS) {
+    fprintf(stderr, "corm_record_register: invalid fields\n");
+    return CM_MISS;
   }
 
-  uint32_t id = ++qmap_records_n;
-  qmap_record_t *rec = &qmap_records[id];
+  uint32_t struct_type_id = corm_reg(struct_size);
+  if (struct_type_id == CM_MISS) {
+    fprintf(stderr, "corm_record_register: corm_reg failed\n");
+    return CM_MISS;
+  }
+
+  uint32_t id = ++corm_records_n;
+  corm_record_t *rec = &corm_records[id];
 
   memset(rec, 0, sizeof(*rec));
   strncpy(rec->name, name ? name : "unnamed", sizeof(rec->name) - 1);
@@ -2404,59 +2404,59 @@ qmap_record_register(const char *name, size_t struct_size,
 }
 
   uint32_t /* API */
-qmap_record_type_id(uint32_t record_id)
+corm_record_type_id(uint32_t record_id)
 {
-  if (!record_id || record_id > qmap_records_n)
-    return QM_MISS;
-  return qmap_records[record_id].struct_type_id;
+  if (!record_id || record_id > corm_records_n)
+    return CM_MISS;
+  return corm_records[record_id].struct_type_id;
 }
 
   void /* API */
-qmap_record_field_set_target_hd(uint32_t record_id,
+corm_record_field_set_target_hd(uint32_t record_id,
     const char *field_name,
     uint32_t target_hd)
 {
-  if (!record_id || record_id > qmap_records_n) return;
-  int fi = qmap_record_find_field(record_id, field_name);
+  if (!record_id || record_id > corm_records_n) return;
+  int fi = corm_record_find_field(record_id, field_name);
   if (fi < 0) return;
-  qmap_records[record_id].fields[fi].target_hd = target_hd;
+  corm_records[record_id].fields[fi].target_hd = target_hd;
 }
 
   uint32_t /* API */
-qmap_field_put(uint32_t hd, const char *item_id,
+corm_field_put(uint32_t hd, const char *item_id,
     const char *field_name, const char *value)
 {
-  if (!value) return QM_MISS;
-  qmap_head_t *head = &qmap_heads[hd];
-  if (head->record_id == 0) return QM_MISS;
-  int fi = qmap_record_find_field(head->record_id, field_name);
-  if (fi < 0) return QM_MISS;
-  uint32_t ft = qmap_records[head->record_id].fields[fi].type;
+  if (!value) return CM_MISS;
+  corm_head_t *head = &corm_heads[hd];
+  if (head->record_id == 0) return CM_MISS;
+  int fi = corm_record_find_field(head->record_id, field_name);
+  if (fi < 0) return CM_MISS;
+  uint32_t ft = corm_records[head->record_id].fields[fi].type;
 
   char key[256];
   size_t ilen = strlen(item_id);
   size_t flen = strlen(field_name);
-  if (ilen + 1 + flen >= sizeof(key)) return QM_MISS;
+  if (ilen + 1 + flen >= sizeof(key)) return CM_MISS;
   memcpy(key, item_id, ilen);
   key[ilen] = ':';
   memcpy(key + ilen + 1, field_name, flen);
   key[ilen + 1 + flen] = '\0';
 
-  if (ft == QM_REFERENCE) {
-    uint32_t thd = qmap_records[head->record_id].fields[fi].target_hd;
+  if (ft == CM_REFERENCE) {
+    uint32_t thd = corm_records[head->record_id].fields[fi].target_hd;
     if (thd == 0)
-      return QM_MISS;
+      return CM_MISS;
     if (!value || ((const char *)value)[0] == '\0')
-      return QM_MISS;
-    uint32_t pos = qmap_pos(thd, value);
+      return CM_MISS;
+    uint32_t pos = corm_pos(thd, value);
     if (pos == UINT32_MAX)
-      return QM_MISS;
-    return qmap_put(hd, key, value);
+      return CM_MISS;
+    return corm_put(hd, key, value);
   }
 
-	if (ft == QM_MULTI_REFERENCE) {
-	    uint32_t thd = qmap_records[head->record_id].fields[fi].target_hd;
-	    if (!thd) return qmap_put(hd, key, value);
+	if (ft == CM_MULTI_REFERENCE) {
+	    uint32_t thd = corm_records[head->record_id].fields[fi].target_hd;
+	    if (!thd) return corm_put(hd, key, value);
 
 	    static char resolved[65536];
 	    size_t off = 0;
@@ -2469,7 +2469,7 @@ qmap_field_put(uint32_t hd, const char *item_id,
 	        size_t cplen = len < sizeof(id) - 1 ? len : sizeof(id) - 1;
 	        memcpy(id, p, cplen);
 	        id[cplen] = '\0';
-	        uint32_t pos = qmap_pos(thd, id);
+	        uint32_t pos = corm_pos(thd, id);
 	        if (off > 0 && off < sizeof(resolved) - 1)
 	          resolved[off++] = '\n';
 	        if (pos != UINT32_MAX) {
@@ -2487,24 +2487,24 @@ qmap_field_put(uint32_t hd, const char *item_id,
 	      p = nl + 1;
 	    }
 	    resolved[off < sizeof(resolved) ? off : sizeof(resolved) - 1] = '\0';
-	    return qmap_put(hd, key, resolved);
+	    return corm_put(hd, key, resolved);
 	  }
 
-  return qmap_put(hd, key, value);
+  return corm_put(hd, key, value);
 }
 
   const char * /* API */
-qmap_field_get(uint32_t hd, const char *item_id,
+corm_field_get(uint32_t hd, const char *item_id,
     const char *field_name)
 {
   if (!item_id || !field_name) return NULL;
-  qmap_head_t *head = &qmap_heads[hd];
+  corm_head_t *head = &corm_heads[hd];
   if (head->record_id == 0) return NULL;
-  int fi = qmap_record_find_field(head->record_id, field_name);
+  int fi = corm_record_find_field(head->record_id, field_name);
   if (fi < 0) return NULL;
-  uint32_t ft = qmap_records[head->record_id].fields[fi].type;
+  uint32_t ft = corm_records[head->record_id].fields[fi].type;
 
-  if (ft == QM_VSTR) {
+  if (ft == CM_VSTR) {
     if (head->vstr_hd == 0) return NULL;
     char key[256];
     size_t ilen = strlen(item_id);
@@ -2514,55 +2514,55 @@ qmap_field_get(uint32_t hd, const char *item_id,
     key[ilen] = ':';
     memcpy(key + ilen + 1, field_name, flen);
     key[ilen + 1 + flen] = '\0';
-    return qmap_get(head->vstr_hd, key);
+    return corm_get(head->vstr_hd, key);
   }
 
-  const void *struct_ptr = qmap_get(hd, item_id);
+  const void *struct_ptr = corm_get(hd, item_id);
   if (!struct_ptr) return NULL;
 
-  size_t field_offset = qmap_records[head->record_id].fields[fi].offset;
+  size_t field_offset = corm_records[head->record_id].fields[fi].offset;
   const char *result = (const char *)struct_ptr + field_offset;
-  if (ft == QM_REFERENCE && (!result || result[0] == '\0'))
+  if (ft == CM_REFERENCE && (!result || result[0] == '\0'))
     return NULL;
   return result;
 }
 
   const char * /* API */
-qmap_get_key(uint32_t hd, uint32_t pos)
+corm_get_key(uint32_t hd, uint32_t pos)
 {
-  qmap_t *qmap = &qmaps[hd];
-  if (pos >= qmap->idm.last)
+  corm_t *corm = &corms[hd];
+  if (pos >= corm->idm.last)
     return NULL;
-  const void *key = qmap->omap[pos];
+  const void *key = corm->omap[pos];
   return key ? (const char *)key : NULL;
 }
 
   uint32_t /* API */
-qmap_pos(uint32_t hd, const char *key)
+corm_pos(uint32_t hd, const char *key)
 {
   if (!key)
     return UINT32_MAX;
-  uint32_t id = qmap_id(hd, key);
-  if (id == QM_MISS)
+  uint32_t id = corm_id(hd, key);
+  if (id == CM_MISS)
     return UINT32_MAX;
-  uint32_t n = qmaps[hd].map[id];
-  return (n == QM_MISS) ? UINT32_MAX : n;
+  uint32_t n = corms[hd].map[id];
+  return (n == CM_MISS) ? UINT32_MAX : n;
 }
 
   size_t /* API */
-qmap_inv_get(uint32_t hd, const char *field_name,
+corm_inv_get(uint32_t hd, const char *field_name,
     uint32_t target_pos,
     uint32_t *out, size_t max)
 {
-  qmap_head_t *head = &qmap_heads[hd];
+  corm_head_t *head = &corm_heads[hd];
   if (!head->inv_hds || head->record_id == 0 || !field_name)
     return 0;
 
-  int fi = qmap_record_find_field(head->record_id, field_name);
+  int fi = corm_record_find_field(head->record_id, field_name);
   if (fi < 0)
     return 0;
 
-  qmap_record_t *rec = &qmap_records[head->record_id];
+  corm_record_t *rec = &corm_records[head->record_id];
   if (rec->fields[fi].target_record == 0)
     return 0;
 
@@ -2570,7 +2570,7 @@ qmap_inv_get(uint32_t hd, const char *field_name,
   if (inv_hd == 0)
     return 0;
 
-  const char *val = qmap_get(inv_hd, &target_pos);
+  const char *val = corm_get(inv_hd, &target_pos);
   if (!val || !*val)
     return 0;
 
@@ -2593,7 +2593,7 @@ qmap_inv_get(uint32_t hd, const char *field_name,
 /* }}} */
 
   inline static size_t
-_qmap_load(uint32_t hd, const char *mmaped, uint32_t dbid)
+_corm_load(uint32_t hd, const char *mmaped, uint32_t dbid)
 {
   const char *mm = mmaped;
   const char *mm_start = mmaped;
@@ -2604,34 +2604,34 @@ _qmap_load(uint32_t hd, const char *mmaped, uint32_t dbid)
   size_t size = * (size_t *) mm;
   mm += sizeof(size_t);
 
-  if (dbid != QM_MISS && lid != dbid)
+  if (dbid != CM_MISS && lid != dbid)
     return mm + size + sizeof(uint32_t) - mm_start;
 
   uint32_t amount = * (uint32_t*) mm;
   mm += sizeof(uint32_t);
 
-  qmap_head_t *head = &qmap_heads[hd];
-  uint32_t ktype = head->types[QM_KEY];
-  uint32_t vtype = head->types[QM_VALUE];
+  corm_head_t *head = &corm_heads[hd];
+  uint32_t ktype = head->types[CM_KEY];
+  uint32_t vtype = head->types[CM_VALUE];
 
   for (uint32_t i = 0; i < amount; i++) {
-    size_t klen = qmap_len(ktype, mm);
+    size_t klen = corm_len(ktype, mm);
     const char *mval = mm + klen;
-    size_t vlen = qmap_len(vtype, mval);
+    size_t vlen = corm_len(vtype, mval);
 
-    qmap_put(hd, mm, mval);
+    corm_put(hd, mm, mval);
     mm = mval + vlen;
   }
 
-  head->iflags |= QM_SDIRTY;
+  head->iflags |= CM_SDIRTY;
   return mm - mm_start;
 }
 
   static inline void
-qmap_load_file(char *filename, uint32_t dbid)
+corm_load_file(char *filename, uint32_t dbid)
 {
-  qmap_file_t *file = (qmap_file_t *)
-    qmap_get(qmap_files_hd, filename);
+  corm_file_t *file = (corm_file_t *)
+    corm_get(corm_files_hd, filename);
 
   struct stat sb;
   char *mm;
@@ -2668,30 +2668,30 @@ skip_open:
 
   mm = file->mmaped;
   while (ids_next(&hd, &cur))
-    mm += _qmap_load(hd, mm, dbid);
+    mm += _corm_load(hd, mm, dbid);
 }
 
   static size_t
-_qmap_calc_size(uint32_t hd)
+_corm_calc_size(uint32_t hd)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  uint32_t ktype = head->types[QM_KEY];
-  uint32_t vtype = head->types[QM_VALUE];
+  corm_head_t *head = &corm_heads[hd];
+  uint32_t ktype = head->types[CM_KEY];
+  uint32_t vtype = head->types[CM_VALUE];
   size_t total_size = sizeof(uint32_t) + sizeof(size_t) + sizeof(head->n);
-  uint32_t cur = qmap_iter(hd, NULL, 0);
+  uint32_t cur = corm_iter(hd, NULL, 0);
   const void *key, *value;
 
-  while (qmap_next(&key, &value, cur)) {
-    total_size += qmap_len(ktype, key);
-    total_size += qmap_len(vtype, value);
+  while (corm_next(&key, &value, cur)) {
+    total_size += corm_len(ktype, key);
+    total_size += corm_len(vtype, value);
   }
 
-  qmap_fin(cur);
+  corm_fin(cur);
   return total_size;
 }
 
   static inline size_t
-qmap_calc_file_size(const ids_t *hds)
+corm_calc_file_size(const ids_t *hds)
 {
   size_t size = 0;
   idsi_t *cur = (idsi_t *) ids_iter((ids_t *) hds);
@@ -2699,35 +2699,35 @@ qmap_calc_file_size(const ids_t *hds)
 
   while (ids_next(&hd, &cur))
     if (mdbs[hd])
-      size += _qmap_calc_size(hd);
+      size += _corm_calc_size(hd);
 
   return size;
 }
 
   inline static size_t
-_qmap_save(void *mmaped, uint32_t hd)
+_corm_save(void *mmaped, uint32_t hd)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  uint32_t ktype = head->types[QM_KEY];
-  uint32_t vtype = head->types[QM_VALUE];
+  corm_head_t *head = &corm_heads[hd];
+  uint32_t ktype = head->types[CM_KEY];
+  uint32_t vtype = head->types[CM_VALUE];
   char *mm_start = mmaped;
   char *mm = mmaped;
-  uint32_t cur = qmap_iter(hd, NULL, 0);
+  uint32_t cur = corm_iter(hd, NULL, 0);
   const void *key, *value;
 
   memcpy(mm, &head->dbid, sizeof(head->dbid));
   mm += sizeof(head->dbid);
 
-  size_t size = _qmap_calc_size(hd);
+  size_t size = _corm_calc_size(hd);
   memcpy(mm, &size, sizeof(size));
   mm += sizeof(size);
 
   memcpy(mm, &head->n, sizeof(head->n));
   mm += sizeof(head->n);
 
-  while (qmap_next(&key, &value, cur)) {
-    size_t klen = qmap_len(ktype, key);
-    size_t vlen = qmap_len(vtype, value);
+  while (corm_next(&key, &value, cur)) {
+    size_t klen = corm_len(ktype, key);
+    size_t vlen = corm_len(vtype, value);
 
     memcpy(mm, key, klen);
     mm += klen;
@@ -2735,20 +2735,20 @@ _qmap_save(void *mmaped, uint32_t hd)
     mm += vlen;
   }
 
-  qmap_fin(cur);
+  corm_fin(cur);
   return mm - mm_start;
 }
 
   static inline void
-qmap_save_file(char *filename)
+corm_save_file(char *filename)
 {
-  qmap_file_t *file = (qmap_file_t *) qmap_get(qmap_files_hd, filename);
+  corm_file_t *file = (corm_file_t *) corm_get(corm_files_hd, filename);
   CBUG(!file, "called with unknown filename");
 
   if (file->mmaped)
     file_close(file);
 
-  file->size = qmap_calc_file_size(&file->ids);
+  file->size = corm_calc_file_size(&file->ids);
 
   file->fd = open(filename, O_RDWR | O_CREAT,
       S_IRUSR | S_IWUSR);
@@ -2777,7 +2777,7 @@ qmap_save_file(char *filename)
     if (!mdbs[hd])
       continue;
 
-    size_t size_written = _qmap_save(mm, hd);
+    size_t size_written = _corm_save(mm, hd);
     mm += size_written;
   }
 
@@ -2785,63 +2785,63 @@ qmap_save_file(char *filename)
 }
 
   void /* API */
-qmap_save(void)
+corm_save(void)
 {
-  uint32_t c = qmap_iter(qmap_files_hd, NULL, 0);
+  uint32_t c = corm_iter(corm_files_hd, NULL, 0);
   const void *key, *value;
 
-  while (qmap_next(&key, &value, c))
-    qmap_save_file((char *) key);
+  while (corm_next(&key, &value, c))
+    corm_save_file((char *) key);
 }
 
 /* MULTI-VALUE API {{{ */
 
   uint32_t /* API */
-qmap_get_multi(uint32_t hd, const void *key)
+corm_get_multi(uint32_t hd, const void *key)
 {
-  qmap_head_t *head = &qmap_heads[hd];
-  qmap_t *qmap = &qmaps[hd];
+  corm_head_t *head = &corm_heads[hd];
+  corm_t *corm = &corms[hd];
 
   if (key == NULL)
-    return qmap_iter(hd, NULL, 0);
+    return corm_iter(hd, NULL, 0);
 
-  if (!(head->flags & QM_MULTIVALUE)) {
-    uint32_t cur = qmap_iter(hd, key, 0);
-    if (qmap_cursors[cur].pos == QM_MISS) {
-      qmap_fin(cur);
-      return QM_MISS;
+  if (!(head->flags & CM_MULTIVALUE)) {
+    uint32_t cur = corm_iter(hd, key, 0);
+    if (corm_cursors[cur].pos == CM_MISS) {
+      corm_fin(cur);
+      return CM_MISS;
     }
     return cur;
   }
 
-  /* QM_MULTIVALUE: walk the key's duplicate chain (O(k)). Cursor advances
-   * through qmap->mv_next[] in insertion order, avoiding the sorted-index
-   * rebuild that qmap_iter(key, QM_RANGE) would trigger on a dirty map. */
+  /* CM_MULTIVALUE: walk the key's duplicate chain (O(k)). Cursor advances
+   * through corm->mv_next[] in insertion order, avoiding the sorted-index
+   * rebuild that corm_iter(key, CM_RANGE) would trigger on a dirty map. */
   size_t key_len;
   uint32_t key_hash;
-  (void) qmap_id_ex(hd, key, &key_len, &key_hash);
-  uint32_t mv_slot = qmap_id_hash(hd, key, key_len, key_hash);
-  uint32_t head_pos = (mv_slot != QM_MISS) ? qmap->map[mv_slot] : QM_MISS;
-  if (head_pos == QM_MISS)
-    return QM_MISS;
+  (void) corm_id_ex(hd, key, &key_len, &key_hash);
+  uint32_t mv_slot = corm_id_hash(hd, key, key_len, key_hash);
+  uint32_t head_pos = (mv_slot != CM_MISS) ? corm->map[mv_slot] : CM_MISS;
+  if (head_pos == CM_MISS)
+    return CM_MISS;
 
   uint32_t cur = idm_new(&cursor_idm);
-  qmap_cur_t *cursor = &qmap_cursors[cur];
+  corm_cur_t *cursor = &corm_cursors[cur];
   cursor->hd = hd;
   cursor->pos = head_pos;
   cursor->ipos = head_pos;
-  cursor->end_pos = QM_MISS;
+  cursor->end_pos = CM_MISS;
   cursor->sub_cur = 0;
   cursor->key = NULL;
   cursor->key_len = 0;
-  cursor->flags = QM_MVCHAIN;
+  cursor->flags = CM_MVCHAIN;
   return cur;
 }
 
   uint32_t /* API */
-qmap_count(uint32_t hd, const void *key)
+corm_count(uint32_t hd, const void *key)
 {
-  qmap_head_t *head = &qmap_heads[hd];
+  corm_head_t *head = &corm_heads[hd];
 
   if (key == NULL) {
     /* Count total entries in map */
@@ -2849,18 +2849,18 @@ qmap_count(uint32_t hd, const void *key)
   }
 
   /* For non-multivalue maps, return 0 or 1 */
-  if (!(head->flags & QM_MULTIVALUE)) {
-    return qmap_get(hd, key) != NULL ? 1 : 0;
+  if (!(head->flags & CM_MULTIVALUE)) {
+    return corm_get(hd, key) != NULL ? 1 : 0;
   }
 
   /* For multivalue maps, use binary search to find first and last
    * occurrences. This keeps the count path logarithmic even when the
    * duplicate run is large. */
-  int first = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_FIRST);
+  int first = corm_bsearch_ex(hd, key, NULL, CORM_BSEARCH_FIRST);
   if (first == -1)
     return 0;
 
-  int last = qmap_bsearch_ex(hd, key, NULL, QMAP_BSEARCH_LAST);
+  int last = corm_bsearch_ex(hd, key, NULL, CORM_BSEARCH_LAST);
   return (uint32_t)(last - first + 1);
 }
 

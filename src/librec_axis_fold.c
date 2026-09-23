@@ -1,5 +1,5 @@
 /* librec_axis_fold.c — functional axis plugin for the 2B-3/-X/-g . test
- * matrix (alpha/beta/pure over real qmap a:u stores) and the 2B-4 write-
+ * matrix (alpha/beta/pure over real corm a:u stores) and the 2B-4 write-
  * fan-out gate.  Registers three axes in one constructor:
  *   alpha  { fill, rank }    → refs from alpha fill keys ∪ alpha stash
  *   beta   { fill, rank }    → refs from beta fill keys ∪ beta stash
@@ -19,16 +19,16 @@
  *     string verbatim for `ref` (same-ref put replaces in place).
  *   rec_axis_store_typed(ctx, spec, ref, blob, len, qtype) — stores the
  *     binary payload as a "T:<decimal>" tag for fixed 4-byte built-ins
- *     (QM_HNDL/QM_U32) so the CLI gate can tell which symbol ran; QM_STR
+ *     (CM_HNDL/CM_U32) so the CLI gate can tell which symbol ran; CM_STR
  *     is stored raw; anything else → -1 (EINVAL).
  *   rec_axis_unstore(ctx, ref) — removes the stash entry (idempotent —
  *     absent ref → 0).
  *   rec_axis_readback(ctx, ref, blob_out, n_out) — malloc'd copy of the
  *     stored entry display string (absent → NULL/0, still 0).
  *
- * QMAP_AXIS_LIBS loads it; -X expr names pull axes by name. */
+ * CORM_AXIS_LIBS loads it; -X expr names pull axes by name. */
 #include <ttypt/rec.h>
-#include <ttypt/qmap.h>
+#include <ttypt/corm.h>
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -41,8 +41,8 @@ typedef struct {
 	char     name[16]; /* axis name parsed from the alongside spec (side-channel) */
 } fold_ctx_t;
 
-/* ── D14 axis-contributed CLI options — dlsym'd by the qmap CLI like
- *    rec_axis_env_config (never declared or called by libqmap): the CLI
+/* ── D14 axis-contributed CLI options — dlsym'd by the corm CLI like
+ *    rec_axis_env_config (never declared or called by libcorm): the CLI
  *    broadcasts every collected --name=value to each bound .so that
  *    declares the name via rec_axis_cli_options(); this plugin adopts
  *    them into fold-level state so the -X fill path (and the test
@@ -52,12 +52,12 @@ static int fold_cli_query_set;
 static int fold_cli_verbose;
 
 /* Default hash mask (D11): power-of-two-minus-one bucket hint, auto-grow
- * (qmap.h:172). QMAP_MASK env overrides (benches); same derivation as the
+ * (corm.h:172). CORM_MASK env overrides (benches); same derivation as the
  * CLI's gen_open so co-opened files always match. */
 static uint32_t
 fold_mask(void)
 {
-	const char *e = getenv("QMAP_MASK");
+	const char *e = getenv("CORM_MASK");
 	if (e && *e) {
 		unsigned long v = strtoul(e, NULL, 10);
 		if (v != 0 && (v & (v + 1)) == 0)
@@ -87,8 +87,8 @@ fold_fill(void *ctx, void *params, rec_set_t *out)
 	if (params && ((const char *)params)[0])
 		fprintf(stderr, "fold %s leaf=%s\n", c->name,
 				(const char *)params);
-	rec_set_fill_qmap_iter(out, c->fill);
-	rec_set_fill_qmap_iter(out, c->stash);
+	rec_set_fill_corm_iter(out, c->fill);
+	rec_set_fill_corm_iter(out, c->stash);
 	rec_set_seal(out);
 	return 0;
 }
@@ -103,7 +103,7 @@ fold_rank(void *ctx, void *params, rec_ref_t ref, float *score)
 }
 
 /* ── 2B-4 store/unstore/readback conventional exports (dlsym'd by the
- *    CLI like rec_axis_open — never declared or called by libqmap). ── */
+ *    CLI like rec_axis_open — never declared or called by libcorm). ── */
 
 int
 rec_axis_store(void *ctx, const char *spec, rec_ref_t ref, const char *value)
@@ -112,7 +112,7 @@ rec_axis_store(void *ctx, const char *spec, rec_ref_t ref, const char *value)
 	(void) spec;
 	if (!c || !value)
 		return -1;
-	qmap_put(c->stash, &ref, value);
+	corm_put(c->stash, &ref, value);
 	return 0;
 }
 
@@ -125,18 +125,18 @@ rec_axis_store_typed(void *ctx, const char *spec, rec_ref_t ref,
 	if (!c || !blob)
 		return -1;
 	/* Fixed 4-byte built-ins: tag-decimal (lets the gate distinguish the
-	 * typed symbol from the string one). QM_STR: stored raw. */
-	if ((qtype == QM_HNDL || qtype == QM_U32)
+	 * typed symbol from the string one). CM_STR: stored raw. */
+	if ((qtype == CM_HNDL || qtype == CM_U32)
 			&& len == sizeof(uint32_t)) {
 		uint32_t v;
 		char tag[16];
 		memcpy(&v, blob, sizeof(v));
 		snprintf(tag, sizeof(tag), "T:%u", v);
-		qmap_put(c->stash, &ref, tag);
+		corm_put(c->stash, &ref, tag);
 		return 0;
 	}
-	if (qtype == QM_STR && len == qmap_type_len(QM_STR)) {
-		qmap_put(c->stash, &ref, blob);
+	if (qtype == CM_STR && len == corm_type_len(CM_STR)) {
+		corm_put(c->stash, &ref, blob);
 		return 0;
 	}
 	errno = EINVAL;
@@ -149,7 +149,7 @@ rec_axis_unstore(void *ctx, rec_ref_t ref)
 	fold_ctx_t *c = ctx;
 	if (!c)
 		return -1;
-	qmap_del(c->stash, &ref);  /* idempotent: absent ref is a no-op */
+	corm_del(c->stash, &ref);  /* idempotent: absent ref is a no-op */
 	return 0;
 }
 
@@ -165,7 +165,7 @@ rec_axis_readback(void *ctx, rec_ref_t ref, char **blob_out, size_t *n_out)
 		*n_out = 0;
 	if (!c)
 		return -1;
-	v = qmap_get(c->stash, &ref);
+	v = corm_get(c->stash, &ref);
 	if (!v)
 		return 0;
 	if (blob_out) {
@@ -179,7 +179,7 @@ rec_axis_readback(void *ctx, rec_ref_t ref, char **blob_out, size_t *n_out)
 }
 
 /* ── D14 CLI-option convention: declared surface + per-option delivery.
- *    Same optional dlsym pattern as rec_axis_env_config — the qmap CLI is
+ *    Same optional dlsym pattern as rec_axis_env_config — the corm CLI is
  *    axis-agnostic and never declares/calls these itself. The option
  *    struct ABI is kernel-owned in <ttypt/rec.h>. ── */
 
@@ -234,10 +234,10 @@ static void fold_init(void)
 }
 
 /* rec_axis_open convention: alongside-default spec <primary-dir>/<primary>-<name>,
- * qmap a:u store (fill side, CLI mask derivation). The stash
+ * corm a:u store (fill side, CLI mask derivation). The stash
  * <primary-dir>/<primary>-<name>.wr is derived beside it.
  *
- * Database name MUST be "hd" with the CLI mask: qmap files namespace
+ * Database name MUST be "hd" with the CLI mask: corm files namespace
  * records by dbid = XXH32(database) and the CLI seeds axis stores via
  * gen_open(..., "hd", ...). Any other name loads nothing (and the
  * exit-time save would truncate the file). */
@@ -253,8 +253,8 @@ rec_axis_open(const char *spec)
 	c = calloc(1, sizeof(*c));
 	if (!c)
 		return NULL;
-	c->fill = qmap_open(spec, "hd", QM_HNDL, QM_U32,
-			fold_mask(), QM_AINDEX);
+	c->fill = corm_open(spec, "hd", CM_HNDL, CM_U32,
+			fold_mask(), CM_AINDEX);
 
 	/* Axis name = the alongside spec suffix after the last '-' (e.g.
 	 * "demo.db-alpha" → "alpha") for the fold_ctx side-channel. */
@@ -271,7 +271,7 @@ rec_axis_open(const char *spec)
 		snprintf(wr, sizeof(wr), "%.*s.wr", (int)(n - 3), spec);
 	else
 		snprintf(wr, sizeof(wr), "%s.wr", spec);
-	c->stash = qmap_open(wr, "hd", QM_HNDL, QM_STR,
+	c->stash = corm_open(wr, "hd", CM_HNDL, CM_STR,
 			fold_mask(), 0);
 	return c;
 }

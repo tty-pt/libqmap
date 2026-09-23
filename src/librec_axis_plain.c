@@ -7,7 +7,7 @@
  * (`<dir>/<primary>-plain.wr`, HNDL→string), so the gate's dlopen-based verifier
  * can read back cross-process what the CLI fan-out stored. */
 #include <ttypt/rec.h>
-#include <ttypt/qmap.h>
+#include <ttypt/corm.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +16,7 @@
 static uint32_t
 plain_mask(void)
 {
-	const char *e = getenv("QMAP_MASK");
+	const char *e = getenv("CORM_MASK");
 	if (e && *e) {
 		unsigned long v = strtoul(e, NULL, 10);
 		if (v != 0 && (v & (v + 1)) == 0)
@@ -31,7 +31,7 @@ plain_fill(void *ctx, void *params, rec_set_t *out)
 	(void) params;
 	if (!ctx)
 		return -1;
-	rec_set_fill_qmap_iter(out, (uint32_t)(uintptr_t) ctx);
+	rec_set_fill_corm_iter(out, (uint32_t)(uintptr_t) ctx);
 	rec_set_seal(out);
 	return 0;
 }
@@ -52,7 +52,7 @@ rec_axis_store(void *ctx, const char *spec, rec_ref_t ref, const char *value)
 	(void) spec;
 	if (!ctx || !value)
 		return -1;
-	qmap_put(stash, &ref, value);
+	corm_put(stash, &ref, value);
 	return 0;
 }
 
@@ -62,7 +62,7 @@ rec_axis_unstore(void *ctx, rec_ref_t ref)
 	uint32_t stash = (uint32_t)(uintptr_t) ctx;
 	if (!ctx)
 		return -1;
-	qmap_del(stash, &ref);  /* idempotent: absent ref is a no-op */
+	corm_del(stash, &ref);  /* idempotent: absent ref is a no-op */
 	return 0;
 }
 
@@ -78,7 +78,7 @@ rec_axis_readback(void *ctx, rec_ref_t ref, char **blob_out, size_t *n_out)
 		*n_out = 0;
 	if (!ctx)
 		return -1;
-	v = qmap_get(stash, &ref);
+	v = corm_get(stash, &ref);
 	if (!v)
 		return 0;
 	if (blob_out) {
@@ -104,7 +104,7 @@ static void plain_init(void)
 
 /* rec_axis_open convention: alongside-default spec
  * <primary-dir>/<primary>-plain; the stash is the same base with .wr. "hd"
- * database + CLI mask (qmap namespaces by dbid = XXH32(database)). */
+ * database + CLI mask (corm namespaces by dbid = XXH32(database)). */
 void *
 rec_axis_open(const char *spec)
 {
@@ -119,6 +119,6 @@ rec_axis_open(const char *spec)
 		snprintf(wr, sizeof(wr), "%.*s.wr", (int)(n - 3), spec);
 	else
 		snprintf(wr, sizeof(wr), "%s.wr", spec);
-	stash = qmap_open(wr, "hd", QM_HNDL, QM_STR, plain_mask(), 0);
+	stash = corm_open(wr, "hd", CM_HNDL, CM_STR, plain_mask(), 0);
 	return (void *)(uintptr_t) stash;
 }

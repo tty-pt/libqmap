@@ -7,13 +7,13 @@
  * Each axis lib is dlopen'd separately and its rec_axis_open/store
  * dlsym'd from its own handle — the four libs all export the same
  * conventional symbols, so linking them into one binary would collapse
- * them to one provider (exactly the discipline the qmap CLI's by-name
+ * them to one provider (exactly the discipline the corm CLI's by-name
  * dlopen enforces). joint_init is likewise dlsym'd, only for the
  * handle-0 burn.
  *
  * Sepal has two columns, chosen by env (D8): floats-direct (default; the
- * gate's offline case) or embedded strings when BOTH QMAP_SEPAL_EMBED_URL
- * and QMAP_SEPAL_EMBED_MODEL are set (the env-gated second case — the
+ * gate's offline case) or embedded strings when BOTH CORM_SEPAL_EMBED_URL
+ * and CORM_SEPAL_EMBED_MODEL are set (the env-gated second case — the
  * seeder configures the embedder from the same env vars and embeds the
  * query text itself so both columns share one qvec consumer). Either way
  * it writes the binary query-vector file `<dir>/q.vec` plus `<dir>/q.dim`
@@ -181,9 +181,9 @@ int main(int argc, char **argv)
 		snprintf(dir, sizeof(dir), "%s", dirname(dpath));
 	}
 
-	url = getenv("QMAP_SEPAL_EMBED_URL");
-	model = getenv("QMAP_SEPAL_EMBED_MODEL");
-	key = getenv("QMAP_SEPAL_EMBED_KEY");
+	url = getenv("CORM_SEPAL_EMBED_URL");
+	model = getenv("CORM_SEPAL_EMBED_MODEL");
+	key = getenv("CORM_SEPAL_EMBED_KEY");
 	embed = (url && *url && model && *model) ? 1 : 0;
 
 	axis_load(&joint, pathdirs);

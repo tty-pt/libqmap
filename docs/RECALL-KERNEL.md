@@ -1,7 +1,7 @@
 # The Recall Kernel — `rec.h`
 
 A domain-free **"filter by axis → join → rank"** loop over uniform 32-bit
-qmap refs. The kernel lives in this library (`include/ttypt/rec.h`,
+corm refs. The kernel lives in this library (`include/ttypt/rec.h`,
 `src/rec.c`). It knows nothing about time, space, text, or meaning: it
 collects refs, combines candidate sets, and keeps the best-ranked results.
 Axis libraries stay independent domain stores and feed the kernel through
@@ -11,7 +11,7 @@ The `rec_query` engine (below) turns that composition into a registry-driven
 query object with `dlopen`-loaded axis plugins — so the kernel composes axes
 without the consumer hand-writing the fill/join/rank loop.
 
-- **Optional and additive.** Raw qmap / axis entry points are untouched; the
+- **Optional and additive.** Raw corm / axis entry points are untouched; the
   kernel and engine are convenience layers, never mandatory wrappers.
 - **Pure C, no domain math.** Weighted composition across axes lives in the
   consumer's score function.
@@ -48,7 +48,7 @@ rec_rank_sorted(board, best_refs, best_scores);    /* best first */
 
 ### Candidate sets — `rec_set_t`
 
-An arena-backed list of `rec_ref_t` (uint32 — a qmap ref, never an axis's
+An arena-backed list of `rec_ref_t` (uint32 — a corm ref, never an axis's
 own internal key). Append with `rec_set_push`,
 then **seal** (sort + dedup) before any join; joins are sorted **merge-joins
 — no hashing** and produce sealed output.
@@ -65,9 +65,9 @@ const rec_ref_t *refs = rec_set_at(s);   /* sealed → sorted, deduped  */
 rec_set_free(s);
 ```
 
-A push **unseals** the set — append more and seal again. Any qmap sorted
+A push **unseals** the set — append more and seal again. Any corm sorted
 handle with fixed-length keys ≤ 4 bytes can be drained directly with
-`rec_set_fill_qmap_iter(s, hd)`.
+`rec_set_fill_corm_iter(s, hd)`.
 
 ### Ranking buffers — `rec_rank_t`
 
@@ -93,7 +93,7 @@ contribute membership only. The rule is deliberately simple, so a
 multi-axis query's score is predictable and axis order is the only knob.
 Both implementations agree:
 
-- **CLI tree eval** (`src/qmap.c`, `qmap_expr_eval` `E_LEAF`): the first
+- **CLI tree eval** (`src/corm.c`, `corm_expr_eval` `E_LEAF`): the first
   leaf axis with `axis->rank` seen in **preorder** records the ranker; a
   composition whose every leaf is filter-only renders **pure-filter** (no
   scores, asc-ref order).
@@ -180,10 +180,10 @@ final recall by the approximate one — `m` is the visible knob.
 ## Query engine & plugin registry (`rec_query`)
 
 The `rec_query` engine is the composition layer the kernel's pattern implies.
-It is a registry-driven query running wholly inside libqmap with **zero axis
+It is a registry-driven query running wholly inside libcorm with **zero axis
 dependencies**: integer slots, opaque `void*` params and ctx, and a name
 string used for introspection only. See `mm-plan/PHASE-2-CLI.md` (site repo)
-for how this composes into the general qmap CLI surface.
+for how this composes into the general corm CLI surface.
 
 ### The axis object
 
@@ -213,7 +213,7 @@ static void reg(void) {
 ```
 
 The consumer loads the `.so` with `dlopen` (the constructor runs and fills
-the libqmap registry) and then binds a live store handle after opening it:
+the libcorm registry) and then binds a live store handle after opening it:
 
 ```c
 int slot = rec_axis_register(...);        /* from the constructor, or looked up */
@@ -237,12 +237,12 @@ e.g. `garden.db-joint` for `garden.db`); an
 axis that is derived rebuilds from the primary at each open (e.g. `stoma`,
 optionally `joint`/`islet`), a persisted one uses the file (`sepal` always).
 Fanout in 2B-4 writes to whatever `ctx` the bound axis represents. The mask
-(`qmap_open(...,mask,flags)`, `qmap.h:204`) is only an initial hint
-(`QDBE_MASK` `4095`, `2^12-1` — D11, env `QMAP_MASK` overrides; auto-grow on
-overflow unless `QM_NOGROW`). This is **not** part of the `rec_query`
-registry API — libqmap never declares, exports, or calls `rec_axis_open`
+(`corm_open(...,mask,flags)`, `corm.h:204`) is only an initial hint
+(`QDBE_MASK` `4095`, `2^12-1` — D11, env `CORM_MASK` overrides; auto-grow on
+overflow unless `CM_NOGROW`). This is **not** part of the `rec_query`
+registry API — libcorm never declares, exports, or calls `rec_axis_open`
 itself; it is purely a naming convention a `dlopen`-based consumer (the
-composed qmap CLI) relies on to bind a freshly-loaded axis without
+composed corm CLI) relies on to bind a freshly-loaded axis without
 per-axis-specific glue code: the CLI hands each axis an **alongside-default
 spec** derived from the primary store's location (`<primary-dir>/<primary>-<name>`,
 or the axis's own memory/empty-field defaults — the axis table below) and
@@ -267,7 +267,7 @@ int rec_axis_readback(void *ctx, rec_ref_t ref, char **blob_out, size_t *n_out);
 
 > **Name note (locked 2026-09-14, U2):** the read-back symbol is
 > `rec_axis_readback`, *not* `rec_axis_get` — `rec_axis_get(int slot)` is
-> the kernel registry lookup (`rec.h`), already landed and used by qmap.c /
+> the kernel registry lookup (`rec.h`), already landed and used by corm.c /
 > the axis suites, so the plugin read-back must not collide with it.
 
 **Axis autonomy (the governing principle):** the consumer passes `(ref,
@@ -275,7 +275,7 @@ value)` blindly; what each axis does on put, delete, and get is entirely the
 axis's own decision, in its own domain grammar. The consumer holds no
 per-axis knowledge.
 
-**No split.** The consumer passes the **whole record string verbatim**; qmap
+**No split.** The consumer passes the **whole record string verbatim**; corm
 never decomposes it — no colon split, no key/value extraction, no
 interpretation. Each axis parses the **entire** string itself, with its own
 grammar. (This is the whole intent of the store surface: one `-p "<string>"`
@@ -291,10 +291,10 @@ confirmed 2026-09-14; D11..D13 pre-2B-4):
   as written on the command line (whole, un-split); `spec` is reserved for
   per-call params, currently NULL (never credentials).
 - Additive typed path (D12): `rec_axis_store_typed` is the same, but for
-  binary primaries — `(blob,len,qtype)` from `qmap_get`+`qmap_type_len(qtype)`
-  (`qmap.h:241`). An axis implements both and keeps the string entry point
+  binary primaries — `(blob,len,qtype)` from `corm_get`+`corm_type_len(qtype)`
+  (`corm.h:241`). An axis implements both and keeps the string entry point
   (shipped `*.so`s stay valid); the CLI prefers the typed symbol when
-  `vtype != QM_STR`, else the string one. Missing typed export ⇒ text-only
+  `vtype != CM_STR`, else the string one. Missing typed export ⇒ text-only
   axis. `readback` already returns `blob/n` (binary-capable).
 - **The primary value format is not strict; axes are.** The primary map
   stores whatever string it is given — any format is valid there. An axis is
@@ -311,14 +311,14 @@ confirmed 2026-09-14; D11..D13 pre-2B-4):
   consumer's `-g`/`-m`/`-c` render first/all/count from it.
 - All three are optional like `rec_axis_open`; an axis missing store/unstore
   is **read-only** (missing get: no read-back). Not declared, exported, or
-  called by libqmap — same CLI↔axis-plugin convention, same
+  called by libcorm — same CLI↔axis-plugin convention, same
   zero-axis-dependency invariant.
 - Surface rules (uniform, consumer-enforced): axis ops require an `a`-type
   primary (refs must exist — the ref-type law, enforced); axis values come
   from `s`/`u`-origin strings (decimals rendered canonically). Notation
   validation is axis-side and loud.
 - Persistence follows each axis's own store (single-writer, no-close
-  invariant: consumer processes never close axis stores; libqmap's exit-time
+  invariant: consumer processes never close axis stores; libcorm's exit-time
   destructor save persists everything still open). A store write must leave
   the file consistent after every mutating op (crash-consistency).
 - Writes go through exactly the same ref (`rec_ref_t`, u32, §2): the ref
@@ -327,7 +327,7 @@ confirmed 2026-09-14; D11..D13 pre-2B-4):
 
 #### The `rec_axis_cli_options` / `rec_axis_config_arg` convention (optional, CLI-specific — not core API)
 
-qmap (not libqmap) lets an axis `.so` declare its own CLI long-options —
+corm (not libcorm) lets an axis `.so` declare its own CLI long-options —
 whole-sentence or runtime values that do not belong in the `-X` expression
 structure or the roster. An axis **may** additionally export:
 
@@ -348,14 +348,14 @@ decode, routing string/numeric values through the shared
 
 Contract:
 
-- qmap collects inline `--name=value` tokens (mirror scan before getopt;
+- corm collects inline `--name=value` tokens (mirror scan before getopt;
   `-X` stays the only query *verb*), and — after every bound axis is
   connected — broadcasts each to every loaded `.so` whose
   `rec_axis_cli_options()` declares that name, via `rec_axis_config_arg`.
 - `rec_axis_cli_options()` returns a NULL-`name`-terminated table;
   `has_arg` 1 = takes a value, 0 = bare flag.
 - `rec_axis_config_arg(name, value)` returns 0 on accept, −1 on reject
-  (unknown name, NULL value, bad range/format). qmap turns a reject, an
+  (unknown name, NULL value, bad range/format). corm turns a reject, an
   undeclared name, a bare `--name` for a value option, or a valued
   `--flag=x` into usage + exit 1.
 - **Inline `--name=value` only** (no space form); max 16 collected options.
@@ -385,23 +385,23 @@ Contract:
   shared broadcast `--query` = plain text never aborts a mixed-axis run
   (a reversed `A..B` still errors).
 - Same CLI↔axis-plugin convention as `rec_axis_open`/store: optional,
-  dlsym'd, libqmap holds zero axis knowledge.
+  dlsym'd, libcorm holds zero axis knowledge.
 
 #### Worked example — the shape in one command
 
 ```sh
-qmap -p "<SOME-DATE>:<SOME STRING>" "demo.db@stoma,sepal,joint:a:s"
+corm -p "<SOME-DATE>:<SOME STRING>" "demo.db@stoma,sepal,joint:a:s"
 ```
 
 Step by step, what this does:
 
 1. **Primary put.** `demo.db` is opened `:a:s` — key type `a` (auto-index),
-   value type `s` (string). qmap auto-assigns a fresh ref and stores the
+   value type `s` (string). corm auto-assigns a fresh ref and stores the
    **whole** argument string `<SOME-DATE>:<SOME STRING>` as the value. Nothing
    is split, no key is extracted, nothing is validated against any axis.
 2. **Fan-out.** The CLI passes `(ref, value)` to **each** axis on the roster
    (`stoma`, `sepal`, `joint`) — the same ref, the **same entire string**,
-   verbatim. qmap has zero per-axis knowledge: it never splits the string,
+   verbatim. corm has zero per-axis knowledge: it never splits the string,
    never pulls out a date, never decides what a "key" is.
 3. **Each axis parses the whole string itself, in its own grammar** (axis
    autonomy, principle 1):
@@ -418,10 +418,10 @@ Step by step, what this does:
    the string is the payload the axis uses to build something queryable
    (a semantic index, a timeline, a token index).
 
-The division of labour is the whole point: **qmap stores and fans out; the
+The division of labour is the whole point: **corm stores and fans out; the
 axis parses** (string `rec_axis_store` or, for binary primaries, the additive
 `rec_axis_store_typed(blob,len,qtype)` — D12; the CLI forwards the primary's
-`qtype`+bytes and prefers the typed symbol when `vtype != QM_STR`). If a
+`qtype`+bytes and prefers the typed symbol when `vtype != CM_STR`). If a
 payload isn't in an axis's grammar, that axis alone rejects it — the primary
 and the other axes are unaffected.
 
@@ -439,7 +439,7 @@ same *kind* of inverse the others already happen to keep.
 | Axis | The existing inverse | New footprint for store/unstore/get |
 |---|---|---|
 | libsepal | store keyed **by ref** (`sepal_get`/`sepal_del`; same-ref put is replace-in-place) | adapters only (`unstore` normalizes absent → 0); string values embed-if-configured else `EINVAL` |
-| libjoint | `id` secondary index (id → ti keys, kept by `qmap_assoc`, backfilled from the file-backed `ti` map on open) | public `joint_erase` + `rec_axis_store`/`unstore`/`readback` (ordered-attempt whole-string grammar; id-index exact-match guard; read-back = NUL-joined store-grammar intervals); no stored state. **DONE 2A-3 (2026-09-14)** |
+| libjoint | `id` secondary index (id → ti keys, kept by `corm_assoc`, backfilled from the file-backed `ti` map on open) | public `joint_erase` + `rec_axis_store`/`unstore`/`readback` (ordered-attempt whole-string grammar; id-index exact-match guard; read-back = NUL-joined store-grammar intervals); no stored state. **DONE 2A-3 (2026-09-14)** |
 | stoma | doc side-table (`field\trow` → folded text) — re-tokenize → the exact posting keys (also serves phrase verification + rank lengths) | public `stoma_unindex`/`_ref` + `rec_axis_store`/`unstore`/`readback` on the canonical `text` field (read-back = folded doc, one entry); no new state; memory-only (rebuilt from primary strings per open). **DONE 2A-2 (2026-09-14)** |
 | libislet | none (cell-keyed, value = ref) | **only structural addition**: `rev` manifest (own single-map `<fname>.ridx`: u32 ref → `;`-joined canonical point string, replace-in-place per ref) + `islet_del_value_N` family (`1..4` + `2_32`); `store` replace-in-place, shared cells legal, `unstore` O(cells-of-ref) |
 
@@ -481,9 +481,9 @@ keeping the CLI generic.
 
 ### Plugin loading stays consumer-side
 
-`dlopen` happens in the CLI or library user, never in libqmap's own link
-table: `ldd bin/qmap` shows only `libqmap` + `libqsys` + libc + libxxhash,
-and a `grep -E 'stoma|libjoint|libislet|libsepal'` across libqmap source
+`dlopen` happens in the CLI or library user, never in libcorm's own link
+table: `ldd bin/corm` shows only `libcorm` + `libqsys` + libc + libxxhash,
+and a `grep -E 'stoma|libjoint|libislet|libsepal'` across libcorm source
 and headers returns zero matches.
 
 ## Status
@@ -534,7 +534,7 @@ and headers returns zero matches.
 - `rec_query` engine (`rec_axis_register` / `rec_query_run` / `rec_join_t`):
   **done** — registry-driven query composition landed. Axis libs gain
   constructors that register; a mock two-axis plugin
-  (`external/libqmap/src/librec_axis_mock.c`) and `test-cli.sh` (wired
+  (`external/libcorm/src/librec_axis_mock.c`) and `test-cli.sh` (wired
   into `make test`) prove the plugin shape without any real axis's
   production data. `rec_axis_open` is implemented in all 4 real axis
   submodules (see the table below) and verified end-to-end against a real,
@@ -544,10 +544,10 @@ and headers returns zero matches.
   low-score one out).
 - **CLI composition is by name, never by file path or slot** (site
   `mm-plan`, phase 2B): the `@` roster in the filespec declares the load
-  set once; axes dlopen by name (`lib<name>.so`) from `$QMAP_AXIS_PATH`;
+  set once; axes dlopen by name (`lib<name>.so`) from `$CORM_AXIS_PATH`;
   stores bind via alongside-defaults (spec derived from the primary
   location); `--params` is each axis's own retrieval grammar. Refs
-  crossing this surface are the `uint32_t` qmap auto-index refs, never an
+  crossing this surface are the `uint32_t` corm auto-index refs, never an
   axis's internal key. The earlier `-Q` recall-query mode (`--dl PATH
   --open SPEC --axis SLOT`, the `rq_*` helpers) is **retired and removed**
   with the `-g` fold (PHASE-2-CLI.md 2B-3). A `bin/qsearch` site wrapper
@@ -559,17 +559,17 @@ and headers returns zero matches.
 | libjoint | `spec` = `joint_init()` filename (empty/NULL → in-memory) | `jd` (unsigned handle, widened via `uintptr_t`) | either (file or derived rebuild; D13) |
 | libislet | `spec` = `"filename:database:mask"` (`:`-separated, any field empty → `islet_open()`'s NULL/0 default) | `uint32_t` db handle (widened via `uintptr_t`) | either (file+`.ridx` or derived; D13) |
 | libsepal | `spec` = `sepal_open()` fname (empty/NULL → memory-only store) | `sepal_vecstore_t *` (direct pointer) | file-backed |
-| stoma | `spec` = decimal `stoma_open()` mask **or** `<dir>/<primary>-stoma` path (per-primary rebuild — `QMAP_AXIS_PRIMARY` first, else the single-roster scan; 2B-2) | `stoma_db_t *` (direct pointer) | derived (memory+rebuild) |
+| stoma | `spec` = decimal `stoma_open()` mask **or** `<dir>/<primary>-stoma` path (per-primary rebuild — `CORM_AXIS_PRIMARY` first, else the single-roster scan; 2B-2) | `stoma_db_t *` (direct pointer) | derived (memory+rebuild) |
 
 ## Verification
 
 - `src/rec_test.c` — sets, sorts, dedup, joins (intersect/subtract/union),
-  `rec_set_fill_qmap_iter`, rank min-score/top_k/ties/streaming; 18 groups.
+  `rec_set_fill_corm_iter`, rank min-score/top_k/ties/streaming; 18 groups.
   Plus the 1C exactness group: fresh-set defaults (exact/bound 1.0),
   set/clear, bound validation (`(0,1]`, NULL → −1), join-propagation matrix
   (intersect/union → approx + bound=min; subtract keeps left's).
 - `src/bench_rec.c` — kernel join vs hand-rolled join parity (identical
-  match counts); equal/zero `qmap_next` scans on the kernel path.
+  match counts); equal/zero `corm_next` scans on the kernel path.
 - libislet: `test_geo_fill.c`, `test_fill_parity.c` (fill == raw collect),
   `test_fill_props.c` (brute-force oracle), `bench_rec_fill.c`,
   `bench_sparse.c`.
