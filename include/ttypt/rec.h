@@ -1,3 +1,6 @@
+#ifndef TTYPT_REC_H
+#define TTYPT_REC_H
+
 /**
  * @file rec.h
  * @brief Recall kernel: uniform candidate sets + a generic ranking loop.
@@ -28,9 +31,6 @@
  *
  * @see corm.h
  */
-#ifndef TTYPT_REC_H
-#define TTYPT_REC_H
-
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>

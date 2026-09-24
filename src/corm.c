@@ -2,91 +2,79 @@
  * @page corm corm(1)
  * @brief Corm command-line tool — create, query, and associate persistent maps.
  *
- * Simple CLI for the Corm engine. Replaces the old **qdb** and links directly against libcorm.
+ * Simple CLI for the Corm engine. Replaces the old **qdb** and links directly
+ * against libcorm.
  *
  * ## Overview
- * Creates/opens key-value databases in memory or on disk; supports queries, associations, mirrors, and iteration.
- * Supports *uint32_t* and *string* types. **Auto-index is only active if the key type is `a`.**
+ *
+ * Creates/opens key-value databases in memory or on disk; supports queries,
+ * associations, mirrors, and iteration. Supports *uint32_t* and *string*
+ * types. **Auto-index is only active if the key type is `a`.**
  *
  * ## Installation
+ *
  * See: <https://github.com/tty-pt/ci/blob/main/docs/install.md#install-ttypt-packages>
  *
  * ## Usage
+ *
  * ```
  * corm [-qa ARG] [[-rl] [-RpdgmcD ARG] ...] file[[:k]:v]
  * ```
- * Run `corm -?` to show full help.
  *
- * ### Options
- * - **-r**
- *   Reverse direction (swap key/value lookup).
- * - **-l**
- *   List all key/value pairs.
- * - **-L**
- *   List "missing" values (**requires `-q`** to specify the paired database).
- * - **-q** *file[:k[:v]]*
- *   Query database for lookups and printing.
- * - **-a** *file[:k[:v]]*
- *   Associate database for reverse lookups and printing.
- * - **-R** *KEY*
- *   Random value for *KEY* (`.` = any).
- * - **-p** *KEY[:VAL]*
- *   Insert or update a key/value pair.
- * - **-d** *KEY[:VAL]*
- *   Delete key/value pair (first match for multivalue maps).
- * - **-D** *KEY[:VAL]*
- *   Delete ALL entries with key (multivalue support).
- * - **-g** *KEY*
- *   Get value(s) for a key (first match for multivalue maps; `.` = all).
- * - **-m** *KEY*
- *   Get ALL values for a key (multivalue iteration).
- * - **-c** *KEY*
- *   Count entries for a key.
- * - **-x**
- *   When printing associations, stop after the first result.
- * - **-k**
- *   Also print keys (for `-g`, `-m`, and `-R`).
+ * Use `.` as the KEY for all keys. Run `corm -?` to show the full help.
  *
- * ### Type specifiers
- * - **u** — uint32_t integer
- * - **s** — string (default for both key and value)
- * - **a** — key only: uint32_t with auto-index
- * - **2&lt;type&gt;** — key only: multivalue support (enables CM_MULTIVALUE|CM_SORTED)
+ * ## Options
  *
- * ### Options
- * - **-r**
- *   Reverse direction (swap key/value lookup).
- * - **-l**
- *   List all key/value pairs.
- * - **-L**
- *   List “missing” values (**requires `-q`** to specify the paired database).
- * - **-q** *file[:k[:v]]*
- *   Query database for lookups and printing.
- * - **-a** *file[:k[:v]]*
- *   Associate database for reverse lookups and printing.
- * - **-R** *KEY*
- *   Random value for *KEY* (`.` = any).
- * - **-p** *KEY[:VAL]*
- *   Insert or update a key/value pair.
- * - **-d** *KEY[:VAL]*
- *   Delete key/value pair(s).
- * - **-g** *KEY*
- *   Get value(s) for a key (`.` = all).
- * - **-x**
- *   When printing associations, stop after the first result.
- * - **-k**
- *   Also print keys (for `-g` and `-R`).
+ *  - `-r`  reverse operation.
+ *  - `-l`  list all values.
+ *  - `-L`  list "missing" values (**requires `-q`** to specify the paired database).
+ *  - `-q` *file[:k[:v]]*  db to use for string lookups and printing.
+ *  - `-a` *file[:k[:v]]*  db to use for reversed string lookups and printing.
+ *  - `-R` *KEY*  get random value of key (empty key for any).
+ *  - `-p` *KEY[:VAL]*  put a key/value pair.
+ *  - `-d` *KEY[:VAL]*  delete key/value pair (first match for multivalue maps).
+ *  - `-D` *KEY[:VAL]*  delete ALL entries with key (multivalue support).
+ *  - `-g` *KEY*  get value(s) of a key (first match for multivalue maps; `.` = all).
+ *  - `-m` *KEY*  get ALL values for a key (multivalue iteration).
+ *  - `-c` *KEY*  count entries for a key.
+ *  - `-x`  when printing associations, bail on the first result.
+ *  - `-k`  also print keys (for `-g`, `-m`, and `-R`).
+ *  - `-X` *EXPR*  composed set query (runs at `-g .` if present, else once after
+ *    all ops); leaves **NAME** [label:**NAME**]; operators `( ) AND OR EXCEPT
+ *    NOT` (uppercase); `A EXCEPT B` = set minus; `NOT X` = complement; structure
+ *    only — parameters go in flags (`--NAME=VALUE` / `--NAME@LABEL=VALUE`).
+ *  - `-t` *N*  cap result count (0 = all).
+ *  - `-b` *F*  score floor.
+ *  - `--NAME=VALUE`  per-axis config; forwarded to every bound axis plugin that
+ *    declares **NAME**.
+ *  - `--list-axes`  list loaded axes and exit.
+ *  - `-?`  display this message.
  *
- * ### Notes
+ * `-q`/`-a` options are processed in order; each entry extends the lookup chain.
+ *
+ * ## Type specifiers (`k` and `v`)
+ *
+ * ```
+ * u               uint32_t
+ * s               string (default for both key and value)
+ * a               key only: uint32_t with auto-index
+ * 2<base-type>    key only: multivalue support (enables CM_MULTIVALUE|CM_SORTED)
+ * ```
+ *
+ * ## Notes
+ *
  * - `-r` is counter-intuitive: when enabled, lookups are done **by primary keys**.
  * - `-q`/`-a` options are processed in order; each entry extends the lookup chain.
- * - Multivalue maps (type `2<type>`) automatically enable CM_MULTIVALUE|CM_SORTED flags.
+ * - Multivalue maps (type `2<base-type>`) automatically enable
+ *   `CM_MULTIVALUE|CM_SORTED` flags.
+ * - For multivalue maps with non-string keys, use `-r` to look up by the key type.
  *
- * ### Examples
- * @code
+ * ## Examples
+ *
+ * ```
  * # Automatic IDs: key 'a', values as strings
- * corm -p Mathew owners.db:a:s              # → Mathew's ID
- * corm -p cat    pets.db:a:s                # → cat's ID
+ * corm -p Mathew owners.db:a:s              # -> Mathew's ID
+ * corm -p cat    pets.db:a:s                # -> cat's ID
  *
  * # Association (no duplicates)
  * corm -p 1:1 assoc.db:u:u                  # owner_id:pet_id
@@ -104,35 +92,12 @@
  * corm -p 100:value1 multi.db:2u:s          # Create multivalue map
  * corm -p 100:value2 multi.db:2u:s          # Add duplicate key
  * corm -p 100:value3 multi.db:2u:s          # Add another
- * corm -r -g 100 multi.db:2u:s              # → value1 (first match)
- * corm -r -m 100 multi.db:2u:s              # → value1 value2 value3 (all)
- * corm -r -c 100 multi.db:2u:s              # → 3 (count)
+ * corm -r -g 100 multi.db:2u:s              # -> value1 (first match)
+ * corm -r -m 100 multi.db:2u:s              # -> value1 value2 value3 (all)
+ * corm -r -c 100 multi.db:2u:s              # -> 3 (count)
  * corm -r -d 100 multi.db:2u:s              # Delete first only
  * corm -r -D 100 multi.db:2u:s              # Delete all with key 100
- * @endcode
- *
- * ### Notes
- * - `-r` is counter-intuitive: when enabled, lookups are done **by primary keys**.
- * - `-q`/`-a` options are processed in order; each entry extends the lookup chain.
- * - Multivalue maps (type `2<type>`) automatically enable CM_MULTIVALUE|CM_SORTED flags.
- * - For multivalue maps with non-string keys, use `-r` to lookup by the key type.
- *
- * # Association (no duplicates)
- * corm -p 1:1 assoc.db:u:u                  # owner_id:pet_id
- *
- * # Get Mathew’s pet (use -q/-a to resolve names/IDs)
- * corm -q owners.db:a:s -a pets.db:a:s -g Mathew assoc.db:u:u
- *
- * # Random value for a KEY
- * corm -q owners.db:a:s -a pets.db:a:s -R Mathew assoc.db:u:u
- *
- * # Chained lookups (multiple -q/-a in order)
- * corm -q owners.db:a:s -q pets.db:a:s -g Mathew assoc.db:u:u
- * @endcode
- *
- * ### Notes
- * - `-r` is counter-intuitive: when enabled, lookups are done **by primary keys**.
- * - `-q`/`-a` options are processed in order; each entry extends the lookup chain.
+ * ```
  *
  * @see corm_handle
  * @see corm_common
