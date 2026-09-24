@@ -1,74 +1,24 @@
-## [Unreleased] — 2B-6 rank convention + grammar verification (mm-plan, 2026-09-15)
+## 1.4.0
 
-### Added
-- **Rank convention (D2) documented:** "first rank-capable axis in query
-  order wins" is the standing rule for scored compositions — the CLI's
-  tree eval picks the first rank-capable leaf in preorder (`src/corm.c`
-  `corm_expr_eval`), the kernel `rec_query_run` fallback picks the first
-  axis in query order with rank+ctx (`src/rec_axis.c:199-211`); filter-only
-  compositions render pure-filter. `--score` combining across rankers
-  stays deferred. Recorded in `docs/RECALL-KERNEL.md`,
-  `mm-plan/PHASE-2-CLI.md` (D2/D10), and `mm-plan/CLI-SURFACE-EXAMPLES.md`
-  §6.
-- **`-X` grammar verified against the built 2B-3 parser** (PHASE-2-CLI.md
-  D10): token kinds, word rules, quote + whole-string VALUE semantics,
-  unary NOT with the `use EXCEPT` hint, uppercase reserved keywords —
-  all match the prototype. Two behaviors now pinned by gate rows:
-  `EXCEPT` chains left-to-right (`except-chain`, `test-cli.sh`) and first
-  rank-capable leaf in preorder wins even with two rankers in one
-  expression (`stoma-over-sepal`, `test-real.sh`).
-
----
-
-## [Unreleased] — 2B-5 mm dialect (mm-plan, 2026-09-15)
-
-### Fixed
-- F4: `corm_open` aliases the live handle when the same (file, map) is
-  opened twice with the same key/value shape (record type, key/value
-  types, table mask + still registered in the file's ids). Previously the
-  second handle orphaned the first (`mdbs[old]=0`) and its as-of-open
-  copy won the exit-save — libstoma's sidecar-scan mirror-open of the
-  primary the CLI already held silently dropped `-p` seeds (when the
-  roster pre-existed) and `-d` forgets. Real-file TDD via
-  `test-mm.sh` (RED-A/RED-B) → green after the fix.
-
-### Added
-- 2B-5 mm dialect (mm-plan `2B-5-IMPLEMENTATION.md`): pi-mm recipes as
-  documented CLI invocations — explicit-ref store
-  (`-p REF:"<DATE>:<TEXT>"`), bounded-window joint ∧ stoma composed
-  search, idempotent roster-backed forget, enumerate+forget reset loop
-  (no single-flag reset exists; the `-1` empty sentinel is skipped).
-  New gate `test-mm.sh` wired into `make test` (joint-only control,
-  seed-persistence, forget-from-all-three, composed/pure-filter search,
-  reset + idempotence, classic zero-plugin regression).
-
----
-
-## [Unreleased] — 2B-4 write fan-out + forget (mm-plan, 2026-09-15)
-
-### Changed
-- CLI `QDBE_MASK` shrinks `32767 → 4095` (D11, 4k buckets — an initial
-  hint only, auto-grow); new `CORM_MASK` env override (validated 2^n-1)
-  shared by the CLI opens, the test plugins, and libstoma's sidecar
-  rebuild so co-opened files always match.
-- `gen_put`/`gen_del`/`gen_del_all` return the op exit status; pass-2
-  threads it through (`rc |=`).
-
-### Added
-- 2B-4 write fan-out (mm-plan `2B-4-IMPLEMENTATION.md`): union write-sets
-  for `-p`/`-d`/`-D` over `{primary} ∪ {@} ∪ {target}` — only in composed
-  mode (effective `@` roster + `:a:` primary); classic path byte-identical.
-  Whole `-p` payload fans out as `(ref, blob,len,qtype)` via the additive
-  `rec_axis_store_typed` when `vtype != CM_STR` (D12), else the string
-  `rec_axis_store`; binary-payload-on-text-only axes loud-skip; `-d`/`-D`
-  collapse to `rec_axis_unstore` (idempotent forget); ref operands are
-  literal u32 or primary reverse-view names; loud partials
-  (attempt-all/report-all/nonzero); `rec_axis_readback` dlsym'd (no CLI
-  surface — deferred).
-- Per-slot store-capability table at bind time (read-only detection).
-- Test plugins: write-capable `librec_axis_fold` (`.wr` stash feeds fill)
-  + string-only `librec_axis_plain`; `test-fanout.sh` gate + dlopen-only
-  `tests/fanout_verify.c` probe.
+- **Renamed `libqmap` → `libcorm`**: the `qmap_*` API and headers are now `corm_*` (`include/ttypt/corm.h`, `qmap.pc` → `corm.pc`); the full test/example suite was migrated to the new name.
+- **The Recall Kernel** (`include/ttypt/rec.h`, `src/rec.c`) — a domain-free "filter by axis → join → rank" loop over uniform 32-bit refs:
+  - `rec_set_t`: arena-backed candidate sets (`rec_set_push`, then `rec_set_seal` = sort + dedup; `rec_set_intersect`/`_union`/`_subtract` are sorted **merge-joins**; `rec_set_count`/`rec_set_at`; drain any corm handle with `rec_set_fill_corm_iter`).
+  - `rec_rank_t`: bounded **top-k min-heap** with a score threshold — `rec_rank_new(top_k, min_score)`/`rec_rank_push` (O(log k))/`rec_rank_sorted` (best-first, ties by ascending ref); scoring via `rec_score_fn`.
+  - Refs are `rec_ref_t` (`uint32_t`), are never interpreted by the kernel, and never an axis's internal key.
+- **Exact vs approximate fills**: an approximate axis (ANN/semantic top-m) must declare itself — `rec_set_set_approx`/`rec_set_approx`/`rec_set_recall_bound` — and joins propagate it (intersect/union → approximate when either operand is, bound = min; subtract keeps the left operand's flag), so intersecting with an approximate set bounds final recall.
+- **`rec_query` engine + axis plugin registry** — registry-driven query composition running wholly inside libcorm with **zero axis dependencies**: `rec_axis_register`/`rec_axis_set_ctx`, `rec_axis_t` (`name`/`fill`/`rank`/`ctx`/`decode`), and `rec_query_run` with `rec_join_t` (AND/OR/NOT), `top_k`/`min_score`, and an optional `consumer_score` callback fed `rec_axis_score_t[]` per surviving ref. `dlopen`-loading of axis plugins happens on the consumer/CLI side only.
+- **Rank composition**: the **first rank-capable axis in query order wins** (preorder in `corm_expr_eval`, kernel fallback in `rec_query_run`); labeled instances `label:axis` rank by the per-ref MAX; `--rank=A` (or scoped `--rank@A`) pins the ranker to one labeled instance; `--score` multi-ranker combining deferred.
+- **New kernel features**: proximity / approximate ranking, the `QM_RANGE_GE` range-eval flag, and `corm_get_ktype` to ask a handle's key type.
+- **corm CLI composition** (`src/corm.c`): `-X` expression trees over a `@`-roster of axes (dlopen by name from `$CORM_AXIS_PATH`), `-p "<whole record string>"` fan-out to every bound axis, `--params` per-axis retrieval grammar, `-g`/`-m`/`-c` read-back rendering, and per-axis CLI long-options via `rec_axis_cli_options`/`rec_axis_config_arg` (scoped `--name@label`, precedence leaf spec > `@label` > `@axis` > unscoped > env). Typed param parsing rides the `rec_cli_*` helpers (`rec_cli_int/_uint/_float/_size/_str_dup/_str_set` + `_b` variants) backed by `rec_spec_scan`'s `key=value` spec grammar (quoted strings included).
+- **Axis plugin conventions (optional, CLI-specific, never declared/exported by libcorm)**: `rec_axis_open(spec)` (opaque spec → store ctx), and the Phase 2A store half `rec_axis_store`/`rec_axis_store_typed`/`rec_axis_unstore`/`rec_axis_readback` — the consumer passes `(ref, whole-string value)` blindly; each axis parses in its own grammar; `unstore` is idempotent (delete cost ∝ entries the ref owns, never O(store)).
+- **Test & bench suite**: `rec_test` (sets/joins/ranks + 1C exactness matrix), `bench_rec` (kernel merge-joins vs hand-rolled parity), `rec_axis_test`/`rec_axis_store_test`/`rec_cli_test`/`rec_axis_bench`, a mock two-axis plugin (`librec_axis_mock.c`) proving the dlopen shape end-to-end, plus the new `test-cli.sh`, `test-fanout.sh`, `test-mm.sh`, `test-real.sh`, `test-roster.sh`, and `test-shortcircuit.sh` shells (with in-repo plugin-stub starters `librec_axis_{fold,plain,probe,stub,zed}.c`).
+- Rename + axis-boilerplate passes above all ride on `rec_ref_t = uint32_t`; refs and axis params are CLI parameters everywhere.
+- **`-X` grammar pinned**: verified against the built 2B-3 parser (mm-plan `PHASE-2-CLI.md` D10) — quote + whole-string `VALUE` semantics, unary `NOT` with the `use EXCEPT` hint, uppercase reserved keywords. Two behaviors are now pinned by gate rows: `EXCEPT` chains left-to-right (`except-chain`, `test-cli.sh`), and the first rank-capable leaf in preorder wins even with two rankers in one expression (`stoma-over-sepal`, `test-real.sh`).
+- **F4 — duplicate-open fix**: `corm_open` now aliases the live handle when the same (file, map) is opened twice with the same key/value shape (record type, key/value types, table mask), while still registered in the file's ids. Previously the second handle orphaned the first and its as-of-open copy won the exit-save — libstoma's sidecar-scan mirror-open of an already-held primary silently dropped `-p` seeds (pre-existing roster) and `-d` forgets. Real-file TDD via `test-mm.sh` (RED-A/RED-B) → green.
+- **2B-5 mm dialect** (mm-plan `2B-5-IMPLEMENTATION.md`): pi-mm recipes as documented CLI invocations — explicit-ref store (`-p REF:"<DATE>:<TEXT>"`), bounded-window joint ∧ stoma composed search, idempotent roster-backed forget, and the enumerate+forget reset loop (no single-flag reset exists; the `-1` empty sentinel is skipped). `test-mm.sh` gate wired into `make test`.
+- **CLI tuning**: `QDBE_MASK` shrinks `32767 → 4095` (D11 — an initial hint, auto-grow); new `CORM_MASK` env override (validated `2^n-1`) shared by the CLI opens, the test plugins, and libstoma's sidecar rebuild so co-opened files match. `gen_put`/`gen_del`/`gen_del_all` now return the op exit status.
+- **2B-4 write fan-out** (mm-plan `2B-4-IMPLEMENTATION.md`): `-p`/`-d`/`-D` write to the union of `{primary} ∪ {@} ∪ {target}` — composed mode only, classic path byte-identical. Whole `-p` payloads fan out as `(ref, blob, len, qtype)` via the additive `rec_axis_store_typed` when `vtype != CM_STR` (D12), else string `rec_axis_store`; binary-payload-on-text-only axes loud-skip; `-d`/`-D` collapse to idempotent `rec_axis_unstore`; ref operands are literal u32 or primary reverse-view names; loud partials (attempt-all/report-all/nonzero). A per-slot store-capability table is built at bind time (read-only detection); `rec_axis_readback` stays dlsym'd with no CLI surface.
+- **Test plugins**: write-capable `librec_axis_fold` (`.wr` stash feeds fill) + string-only `librec_axis_plain`; `test-fanout.sh` gate + dlopen-only `tests/fanout_verify.c` probe.
 
 ---
 
